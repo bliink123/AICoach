@@ -8,7 +8,7 @@ import logging
 # Configure logger
 logger = logging.getLogger(__name__)
 
-# Load environment variables from the .env file
+# Load environment variables from .env file
 load_dotenv()
 
 # Set up token storage file path
@@ -61,39 +61,36 @@ if client:
     for activity in activities:
         print(f"Activity ID: {activity['activityId']} - {activity['activityName']}")
 
-    # Get today's date in ISO format (YYYY-MM-DD) and fetch sleep data for today
-    today = date.today().isoformat()
-    sleep_data = client.get_sleep_data(today)
-    
-    # Attempt to extract the overall sleep score from dailySleepDTO -> sleepScores -> overall
-    print("\nExtracted Overall Sleep Score:")
+    # Get today's date in ISO format (YYYY-MM-DD)
+    today = date.today()
+    sleep_data = client.get_sleep_data(today.isoformat())
+
+    # Define the list of keys we are interested in
+    desired_keys = [
+
+        "avgOvernightHrv",
+
+        "bodyBatteryChange",
+
+    ]
+
+    print("\nTrimmed Sleep Data:")
+    # If sleep_data is a list of records:
     if isinstance(sleep_data, list):
-        found = False
         for record in sleep_data:
             if isinstance(record, dict):
-                daily = record.get("dailySleepDTO", {})
-                sleep_scores = daily.get("sleepScores", {})
-                overall = sleep_scores.get("overall", {})
-                overall_value = overall.get("value")
-                if overall_value is not None:
-                    print(f"Overall Sleep Score: {overall_value}")
-                    found = True
-                else:
-                    print("Overall sleep score not found in this record.")
+                trimmed = {key: record.get(key, "Not Available") for key in desired_keys}
+                print(json.dumps(trimmed, indent=4))
             else:
-                print("Unexpected record type:", type(record))
-        if not found:
-            print("No sleep record contained an overall sleep score.")
+                print("Unexpected data format:", record)
+    # If sleep_data is a single dict (adjust if necessary)
     elif isinstance(sleep_data, dict):
-        daily = sleep_data.get("dailySleepDTO", {})
-        sleep_scores = daily.get("sleepScores", {})
-        overall = sleep_scores.get("overall", {})
-        overall_value = overall.get("value")
-        if overall_value is not None:
-            print(f"Overall Sleep Score: {overall_value}")
-        else:
-            print("Overall sleep score not found in sleep_data.")
+        trimmed = {key: sleep_data.get(key, "Not Available") for key in desired_keys}
+        print(json.dumps(trimmed, indent=4))
     else:
         print("Unexpected sleep data format:", type(sleep_data))
 else:
     print("Failed to initialize Garmin API.")
+
+
+#this old script returned     "avgOvernightHrv", "bodyBatteryChange"
