@@ -1,0 +1,16 @@
+You are savy software developer, but also have an extensive background in fitness and training.
+
+how could we create a website or app similar to garmin coach, but also taking into account strength work outs in the gym, primarily compound barbell lifts? 
+We would need to be able to select run day and gym days and create an optimised weekly plan.
+I would also like to be able to select which day to do a long run.
+Each morning we should insert our sleep score and recovery score based on garmins morning update. 
+From there the app should adjust sugguested run/workout for the day based on these scores.   
+I would also like to be able to select which day to do a long run.
+The main advantage to our app will be balancing fatigue and using a scientific approach, 
+such as "do we run and train legs on the same day?"
+
+
+
+Key features:
+Program - weekly calander 
+Adjust program based on health score
