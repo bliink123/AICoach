@@ -9,6 +9,7 @@ from google import genai  # Gemini API client
 import requests
 from flask_cors import CORS
 
+
 # Configure logger
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -35,12 +36,15 @@ def get_mfa():
 def init_api(email=None, password=None):
     """Initialize Garmin API with token caching."""
     try:
-        logger.info("Attempting token login using tokens from '%s'.", TOKEN_STORE)
+        logger.info("Attempting token login using token data from '%s'.", TOKEN_STORE)
         garmin = Garmin()  # Instantiate without credentials to use tokens
         garmin.login(TOKEN_STORE)
     except Exception as err:
         logger.error("Token login failed: %s", err)
-        print(f"Tokens not present or expired. Logging in with credentials. Tokens will be stored in '{TOKEN_STORE}'.")
+        print(
+            f"Login tokens not present or expired. Logging in with credentials.\n"
+            f"Tokens will be stored in '{TOKEN_STORE}' for future use.\n"
+        )
         try:
             if not email or not password:
                 email, password = get_credentials()
@@ -48,7 +52,7 @@ def init_api(email=None, password=None):
             garmin.login()
             # Store tokens for future use
             garmin.garth.dump(TOKEN_STORE)
-            logger.info("Tokens stored in '%s'.", TOKEN_STORE)
+            logger.info("Tokens stored successfully in '%s'.", TOKEN_STORE)
         except Exception as err:
             logger.error("Credential login failed: %s", err)
             return None
@@ -56,8 +60,8 @@ def init_api(email=None, password=None):
 
 def extract_recovery_metrics(sleep_data):
     """
-    Extract overallSleepScore, avgOvernightHrv, and bodyBatteryChange.
-    First check inside dailySleepDTO; if not found, fall back to top-level.
+    Extract overallSleepScore, avgOvernightHrv, and bodyBatteryChange from sleep_data.
+    First looks inside dailySleepDTO; if missing, falls back to top-level.
     """
     overall_value = None
     avg_over_night_hrv = None
@@ -80,21 +84,8 @@ def extract_recovery_metrics(sleep_data):
                     break
     return overall_value, avg_over_night_hrv, body_battery_change
 
-def determine_workout(overall, avg_hrv, battery_change):
-    """
-    Simple rule-based decision tree for determining workout type.
-    Adjust these thresholds as necessary based on data.
-    """
-    if overall < 60 or avg_hrv < 50 or battery_change > 70:
-        return "Recovery - Light Activity (e.g., yoga, walking, gentle stretching, arm session, recovery run)"
-    elif overall >= 60 and overall <= 80 and avg_hrv >= 50 and avg_hrv <= 70 and battery_change <= 70:
-        return "Moderate Workout - Balanced Cardio and Strength Session"
-    elif overall > 80 and avg_hrv > 70 and battery_change < 50:
-        return "High-Intensity Workout - Focus on Strength and Cardio"
-    else:
-        return "Moderate Workout - Adjust intensity as needed"
 
-# Initialize the Garmin client using credentials from .env
+# Initialize Garmin client using credentials from .env
 GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
 garmin_client = init_api(GARMIN_USERNAME, GARMIN_PASSWORD)
@@ -110,20 +101,21 @@ def overall_sleep():
         return jsonify({"error": "Failed to retrieve sleep data"}), 500
 
     overall_value, avg_over_night_hrv, body_battery_change = extract_recovery_metrics(sleep_data)
+
     result = {
         "overallSleepScore": overall_value if overall_value is not None else None,
         "avgOvernightHrv": avg_over_night_hrv if avg_over_night_hrv is not None else None,
         "bodyBatteryChange": body_battery_change if body_battery_change is not None else None
     }
+
+    #uncomment below to get json dump if values are returning null
+    #print("\nFull Raw Sleep Data:")
+    #print(json.dumps(sleep_data, indent=4))
     return jsonify(result)
 
 @app.route('/api/ai-coach', methods=['GET'])
 def ai_coach():
-    """
-    Generate two workout recommendations:
-    1. A rule-based recommendation using our decision tree.
-    2. An AI-generated recommendation using Gemini.
-    """
+    """Generate a workout recommendation based on recovery metrics using Gemini AI."""
     try:
         today = date.today().isoformat()
         sleep_data = garmin_client.get_sleep_data(today)
@@ -137,10 +129,6 @@ def ai_coach():
         logger.error("Required recovery data not found")
         return jsonify({"error": "Required recovery data not found"}), 404
 
-    # Rule-based recommendation
-    rulesRecommendation = determine_workout(overall_value, avg_over_night_hrv, body_battery_change)
-
-    # AI recommendation via Gemini
     prompt = (
         f"Based on an overall sleep score of {overall_value}, an average overnight HRV of {avg_over_night_hrv}, "
         f"and a body battery change of {body_battery_change},"
@@ -156,14 +144,13 @@ def ai_coach():
             model=gemini_model,
             contents=prompt
         )
-        aiRecommendation = response.text
+        recommendation = response.text
     except Exception as e:
         logger.error("Error calling Gemini API: %s", e)
-        return jsonify({"error": "Failed to generate AI recommendation"}), 500
+        return jsonify({"error": "Failed to generate recommendation"}), 500
 
     return jsonify({
-        "rulesBasedRecommendation": rulesRecommendation,
-        "aiCoachRecommendation": aiRecommendation,
+        "recommendation": recommendation,
         "overallSleepScore": overall_value,
         "avgOvernightHrv": avg_over_night_hrv,
         "bodyBatteryChange": body_battery_change

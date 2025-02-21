@@ -8,14 +8,14 @@ import {
   Typography,
   Button,
   CircularProgress,
-  Snackbar
+  Snackbar,
+  Grid
 } from '@mui/material';
-import Grid from '@mui/material/Grid2'; // Grid2 component
 
 function Dashboard() {
   const [sleepData, setSleepData] = useState(null);
   const [activities, setActivities] = useState([]);
-  const [aiRecommendation, setAiRecommendation] = useState(null);
+  const [aiData, setAiData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
@@ -31,7 +31,7 @@ function Dashboard() {
       ]);
       setSleepData(sleepRes.data);
       setActivities(activitiesRes.data);
-      setAiRecommendation(aiRes.data);
+      setAiData(aiRes.data);
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Error fetching data from the server.");
@@ -55,7 +55,7 @@ function Dashboard() {
 
   return (
     <Container sx={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <Typography variant="h3" align="center" color="#FED5D" gutterBottom>
+      <Typography variant="h3" align="center" gutterBottom>
         AICOACH Dashboard
       </Typography>
 
@@ -66,7 +66,6 @@ function Dashboard() {
           backgroundColor: "#FED5D1",
           color: "#000",
           textTransform: "none",
-          "&:hover": { backgroundColor: "#e0b9b3" },
           marginBottom: "20px"
         }}
       >
@@ -85,9 +84,10 @@ function Dashboard() {
         </Typography>
       )}
 
-      <Grid container spacing={3} sx={{justifyContent: "flex-start",alignItems: "flex-start",}}>
-        <Grid xs={20} md={4}>
-          <Card variant="outlined" sx={{ width: '100%' }}>
+      <Grid container spacing={3}>
+        {/* Row 1: Sleep Data and Recent Activities */}
+        <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+          <Card variant="outlined" sx={{ width: '100%', flex: 1 }}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Sleep Data
@@ -111,33 +111,13 @@ function Dashboard() {
           </Card>
         </Grid>
 
-        <Grid xs={20} md={4}>
-          <Card variant="outlined" sx={{ width: '100%' }}>
-            <CardContent>
-              <Typography variant="h5" gutterBottom>
-                AI Coach Recommendation
-              </Typography>
-              {aiRecommendation ? (
-                <>
-                  <Typography variant="body1">{aiRecommendation.recommendation}</Typography>
-                  <Typography variant="body2" color="textSecondary">
-                    Based on a sleep score of {aiRecommendation.overallSleepScore}, HRV of {aiRecommendation.avgOvernightHrv}, and body battery change of {aiRecommendation.bodyBatteryChange}.
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="body2">No recommendation available.</Typography>
-              )}
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid xs={20} md={4}>
-          <Card variant="outlined" sx={{ width: '100%' }}>
+        <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
+          <Card variant="outlined" sx={{ width: '100%', flex: 1 }}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Recent Activities
               </Typography>
-              {activities.length > 0 ? (
+              {activities && activities.length > 0 ? (
                 <ul style={{ listStyleType: "none", padding: 0 }}>
                   {activities.map(activity => (
                     <li key={activity.activityId}>
@@ -149,6 +129,38 @@ function Dashboard() {
                 </ul>
               ) : (
                 <Typography variant="body2">No activities available.</Typography>
+              )}
+            </CardContent>
+          </Card>
+        </Grid>
+
+        {/* Row 2: AI Coach Recommendations */}
+        <Grid item xs={12}>
+          <Card variant="outlined" sx={{ width: '100%' }}>
+            <CardContent>
+              <Typography variant="h5" gutterBottom>
+                Workout Recommendations
+              </Typography>
+              {aiData ? (
+                <>
+                  <Typography variant="h6">
+                    Rules-Based Recommendation
+                  </Typography>
+                  <Typography variant="body1" sx={{ marginBottom: "10px" }}>
+                    {aiData.rulesBasedRecommendation}
+                  </Typography>
+                  <Typography variant="h6">
+                    AI Coach Recommendation
+                  </Typography>
+                  <Typography variant="body1">
+                    {aiData.aiCoachRecommendation}
+                  </Typography>
+                  <Typography variant="body2" color="textSecondary" sx={{ marginTop: "10px" }}>
+                    (Based on a sleep score of {aiData.overallSleepScore}, HRV of {aiData.avgOvernightHrv}, and body battery change of {aiData.bodyBatteryChange}.)
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body2">No recommendation available.</Typography>
               )}
             </CardContent>
           </Card>

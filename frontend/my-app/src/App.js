@@ -8,11 +8,15 @@ function App() {
     <>
       <GlobalStyles styles={{
         body: {
-          backgroundColor: '#141414',
+          background: 'linear-gradient(135deg, #141414, #3a3a3a)',
+          backgroundRepeat: 'no-repeat',
+          backgroundAttachment: 'fixed',
+          backgroundSize: 'cover',
           color: '#ffffff',
           margin: 0,
           padding: 0,
-          fontFamily: '"Inter", sans-serif'
+          fontFamily: '"Inter", sans-serif',
+          minHeight: '100vh'
         }
       }} />
       <Dashboard />
