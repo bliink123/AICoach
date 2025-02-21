@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 import logging
 from google import genai  # Gemini API client
 import requests
+from flask_cors import CORS
+
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -19,6 +21,7 @@ load_dotenv()
 TOKEN_STORE = os.path.expanduser("~/.garmin_tokens.json")
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for your app
 
 def get_credentials():
     """Prompt user for credentials if not set in environment variables."""
@@ -55,6 +58,33 @@ def init_api(email=None, password=None):
             return None
     return garmin
 
+def extract_recovery_metrics(sleep_data):
+    """
+    Extract overallSleepScore, avgOvernightHrv, and bodyBatteryChange from sleep_data.
+    First looks inside dailySleepDTO; if missing, falls back to top-level.
+    """
+    overall_value = None
+    avg_over_night_hrv = None
+    body_battery_change = None
+
+    def extract_from_data(data):
+        daily = data.get("dailySleepDTO", {})
+        overall_val = daily.get("sleepScores", {}).get("overall", {}).get("value")
+        avg_hrv = daily.get("avgOvernightHrv") or data.get("avgOvernightHrv")
+        battery = daily.get("bodyBatteryChange") or data.get("bodyBatteryChange")
+        return overall_val, avg_hrv, battery
+
+    if isinstance(sleep_data, dict):
+        overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(sleep_data)
+    elif isinstance(sleep_data, list):
+        for record in sleep_data:
+            if isinstance(record, dict):
+                overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(record)
+                if overall_value is not None:
+                    break
+    return overall_value, avg_over_night_hrv, body_battery_change
+
+
 # Initialize Garmin client using credentials from .env
 GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
 GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
@@ -70,38 +100,17 @@ def overall_sleep():
         logger.error("Error fetching sleep data: %s", e)
         return jsonify({"error": "Failed to retrieve sleep data"}), 500
 
-    overall_value = None
-    avg_over_night_hrv = None
-    body_battery_change = None
-
-    def extract_values(data):
-        daily = data.get("dailySleepDTO", {})
-        overall_value = daily.get("sleepScores", {}).get("overall", {}).get("value")
-        avg_over_night_hrv = daily.get("avgOvernightHrv")
-        body_battery_change = daily.get("bodyBatteryChange")
-        return overall_value, avg_over_night_hrv, body_battery_change
-
-    try:
-        if isinstance(sleep_data, dict):
-            overall_value, avg_over_night_hrv, body_battery_change = extract_values(sleep_data)
-        elif isinstance(sleep_data, list):
-            for record in sleep_data:
-                if isinstance(record, dict):
-                    overall_value, avg_over_night_hrv, body_battery_change = extract_values(record)
-                    if overall_value is not None:
-                        break
-        else:
-            logger.error("Unexpected sleep data format: %s", type(sleep_data))
-            return jsonify({"error": "Unexpected sleep data format"}), 500
-    except Exception as e:
-        logger.error("Error processing sleep data: %s", e)
-        return jsonify({"error": "Error processing sleep data"}), 500
+    overall_value, avg_over_night_hrv, body_battery_change = extract_recovery_metrics(sleep_data)
 
     result = {
         "overallSleepScore": overall_value if overall_value is not None else None,
         "avgOvernightHrv": avg_over_night_hrv if avg_over_night_hrv is not None else None,
         "bodyBatteryChange": body_battery_change if body_battery_change is not None else None
     }
+
+    #uncomment below to get json dump if values are returning null
+    #print("\nFull Raw Sleep Data:")
+    #print(json.dumps(sleep_data, indent=4))
     return jsonify(result)
 
 @app.route('/api/ai-coach', methods=['GET'])
@@ -114,32 +123,7 @@ def ai_coach():
         logger.error("Error fetching sleep data for AI coach: %s", e)
         return jsonify({"error": "Failed to retrieve sleep data"}), 500
 
-    overall_value = None
-    avg_over_night_hrv = None
-    body_battery_change = None
-
-    def extract_values(data):
-        daily = data.get("dailySleepDTO", {})
-        overall_value = daily.get("sleepScores", {}).get("overall", {}).get("value")
-        avg_over_night_hrv = daily.get("avgOvernightHrv")
-        body_battery_change = daily.get("bodyBatteryChange")
-        return overall_value, avg_over_night_hrv, body_battery_change
-
-    try:
-        if isinstance(sleep_data, dict):
-            overall_value, avg_over_night_hrv, body_battery_change = extract_values(sleep_data)
-        elif isinstance(sleep_data, list):
-            for record in sleep_data:
-                if isinstance(record, dict):
-                    overall_value, avg_over_night_hrv, body_battery_change = extract_values(record)
-                    if overall_value is not None:
-                        break
-        else:
-            logger.error("Unexpected sleep data format for AI coach: %s", type(sleep_data))
-            return jsonify({"error": "Unexpected sleep data format"}), 500
-    except Exception as e:
-        logger.error("Error processing sleep data for AI coach: %s", e)
-        return jsonify({"error": "Error processing sleep data"}), 500
+    overall_value, avg_over_night_hrv, body_battery_change = extract_recovery_metrics(sleep_data)
 
     if overall_value is None or avg_over_night_hrv is None or body_battery_change is None:
         logger.error("Required recovery data not found")
@@ -147,7 +131,8 @@ def ai_coach():
 
     prompt = (
         f"Based on an overall sleep score of {overall_value}, an average overnight HRV of {avg_over_night_hrv}, "
-        f"and a body battery change of {body_battery_change}, please recommend an appropriate workout for today."
+        f"and a body battery change of {body_battery_change},"
+        f"in 120 words please reccomnded a run if my fully recovered pace was 6min/km for 5k. "
     )
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -186,4 +171,4 @@ def index():
     return jsonify({"message": "Welcome to the AICOACH API. Use /api/overall-sleep, /api/ai-coach, or /api/activities."})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=8080)
