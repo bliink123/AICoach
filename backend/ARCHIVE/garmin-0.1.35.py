@@ -79,46 +79,11 @@ def init_api(email=None, password=None):
             return None
     return garmin
 
-def get_training_readiness(date_str):
+def extract_recovery_metrics(sleep_data):
     """
-    Retrieve training readiness data for the given date.
-    Assumes training readiness is provided by a separate endpoint at the top level.
+    Extract overallSleepScore, avgOvernightHrv, and bodyBatteryChange.
+    First check inside dailySleepDTO; if not found, fall back to top-level.
     """
-    try:
-        # Attempt to call a method to get training readiness data.
-        # Replace this with the appropriate call if the method name is different.
-        training_data = garmin_client.get_training_readiness(date_str)
-    except Exception as e:
-        logger.error("Error fetching training readiness data: %s", e)
-        training_data = None
-
-    readiness = None
-    if training_data:
-        if isinstance(training_data, dict):
-            readiness = training_data.get("score") 
-        elif isinstance(training_data, list):
-            for record in training_data:
-                if isinstance(record, dict):
-                    readiness = record.get("score") 
-                    if readiness is not None:
-                        break
-    #print(json.dumps(training_data, indent=4)) #dumps JSON 
-    return readiness
-
-def get_recovery_metrics(date_str):
-    """
-    Retrieve sleep data for the given date and extract:
-      - overallSleepScore
-      - avgOvernightHrv
-      - bodyBatteryChange
-    Also retrieves training readiness from a separate endpoint.
-    """
-    try:
-        sleep_data = garmin_client.get_sleep_data(date_str)
-    except Exception as e:
-        logger.error("Error fetching sleep data: %s", e)
-        sleep_data = None
-
     overall_value = None
     avg_over_night_hrv = None
     body_battery_change = None
@@ -130,21 +95,17 @@ def get_recovery_metrics(date_str):
         battery = daily.get("bodyBatteryChange") or data.get("bodyBatteryChange")
         return overall_val, avg_hrv, battery
 
-    if sleep_data:
-        if isinstance(sleep_data, dict):
-            overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(sleep_data)
-        elif isinstance(sleep_data, list):
-            for record in sleep_data:
-                if isinstance(record, dict):
-                    overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(record)
-                    if overall_value is not None:
-                        break
+    if isinstance(sleep_data, dict):
+        overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(sleep_data)
+    elif isinstance(sleep_data, list):
+        for record in sleep_data:
+            if isinstance(record, dict):
+                overall_value, avg_over_night_hrv, body_battery_change = extract_from_data(record)
+                if overall_value is not None:
+                    break
+    return overall_value, avg_over_night_hrv, body_battery_change
 
-    # Retrieve training readiness separately
-    training_readiness = get_training_readiness(date_str)
-    return overall_value, avg_over_night_hrv, body_battery_change, training_readiness
-
-def determine_workout(overall, avg_hrv, battery_change, readiness):
+def determine_workout(overall, avg_hrv, battery_change):
     """
     Revised rule-based decision tree for workout recommendations.
     
@@ -155,11 +116,11 @@ def determine_workout(overall, avg_hrv, battery_change, readiness):
     - High values (overall > 80, avgOvernightHrv > 70, bodyBatteryChange > 70) indicate good recovery,
       so recommend a high-intensity workout.
     """
-    if overall < 60 or avg_hrv < 50 or battery_change < 30 or (readiness is not None and readiness < 50):
+    if overall < 60 or avg_hrv < 50 or battery_change < 30:
         return "Recovery - Light Activity (e.g., yoga, walking, gentle stretching)"
-    elif overall >= 60 and overall <= 80 and avg_hrv >= 50 and avg_hrv <= 70 and battery_change >= 30 and battery_change <= 40 and (readiness is None or readiness >= 50):
+    elif 60 <= overall <= 80 and 50 <= avg_hrv <= 70 and 30 <= battery_change <= 40:
         return "Moderate Workout - Balanced Cardio and Strength Session"
-    elif overall > 80 and avg_hrv > 70 and battery_change > 40 and (readiness is not None and readiness > 70):
+    elif overall > 80 and avg_hrv > 70 and battery_change > 40:
         return "High-Intensity Workout - Focus on Strength and Cardio"
     else:
         return "Moderate Workout - Adjust intensity as needed"
@@ -171,14 +132,19 @@ garmin_client = init_api(GARMIN_USERNAME, GARMIN_PASSWORD)
 
 @app.route('/api/overall-sleep', methods=['GET'])
 def overall_sleep():
-    """Return overall sleep score, avgOvernightHrv, bodyBatteryChange, and trainingReadiness."""
-    today = date.today().isoformat()
-    overall_value, avg_over_night_hrv, body_battery_change, training_readiness = get_recovery_metrics(today)
+    """Return overall sleep score, avgOvernightHrv, and bodyBatteryChange."""
+    try:
+        today = date.today().isoformat()
+        sleep_data = garmin_client.get_sleep_data(today)
+    except Exception as e:
+        logger.error("Error fetching sleep data: %s", e)
+        return jsonify({"error": "Failed to retrieve sleep data"}), 500
+
+    overall_value, avg_over_night_hrv, body_battery_change = extract_recovery_metrics(sleep_data)
     result = {
         "overallSleepScore": overall_value if overall_value is not None else None,
         "avgOvernightHrv": avg_over_night_hrv if avg_over_night_hrv is not None else None,
-        "bodyBatteryChange": body_battery_change if body_battery_change is not None else None,
-        "trainingReadiness": training_readiness if training_readiness is not None else None
+        "bodyBatteryChange": body_battery_change if body_battery_change is not None else None
     }
     return jsonify(result)
 
@@ -186,24 +152,29 @@ def overall_sleep():
 def ai_coach():
     """
     Generate two workout recommendations:
-    1. A rules-based recommendation using our decision tree.
+    1. A rule-based recommendation using our decision tree.
     2. An AI-generated recommendation using Gemini.
     """
-    today = date.today().isoformat()
-    overall_value, avg_over_night_hrv, body_battery_change, training_readiness = get_recovery_metrics(today)
+    try:
+        today = date.today().isoformat()
+        sleep_data = garmin_client.get_sleep_data(today)
+    except Exception as e:
+        logger.error("Error fetching sleep data for AI coach: %s", e)
+        return jsonify({"error": "Failed to retrieve sleep data"}), 500
 
-    # Check that we have the required metrics for a recommendation
-    if overall_value is None or avg_over_night_hrv is None or body_battery_change is None or training_readiness is None:
+    overall_value, avg_over_night_hrv, body_battery_change = extract_recovery_metrics(sleep_data)
+
+    if overall_value is None or avg_over_night_hrv is None or body_battery_change is None:
         logger.error("Required recovery data not found")
         return jsonify({"error": "Required recovery data not found"}), 404
 
     # Rule-based recommendation
-    rulesRecommendation = determine_workout(overall_value, avg_over_night_hrv, body_battery_change, training_readiness)
+    rulesRecommendation = determine_workout(overall_value, avg_over_night_hrv, body_battery_change)
 
     # AI recommendation via Gemini
     prompt = (
         f"Based on an overall sleep score of {overall_value}, an average overnight HRV of {avg_over_night_hrv}, "
-        f"a body battery change of {body_battery_change}, and a training readiness score of {training_readiness},"
+        f"and a body battery change of {body_battery_change},"
         f"in 120 words please reccomnded a run if my fully recovered pace was 6min/km for 5k. "
     )
 
@@ -226,8 +197,7 @@ def ai_coach():
         "aiCoachRecommendation": aiRecommendation,
         "overallSleepScore": overall_value,
         "avgOvernightHrv": avg_over_night_hrv,
-        "bodyBatteryChange": body_battery_change,
-        "trainingReadiness": training_readiness 
+        "bodyBatteryChange": body_battery_change
     })
 
 @app.route('/api/activities', methods=['GET'])

@@ -2,13 +2,13 @@ import os
 import json
 from datetime import date, datetime
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from garminconnect import Garmin
 from dotenv import load_dotenv
 import logging
 from google import genai  # Gemini API client
 import requests
-from flask_cors import CORS
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ load_dotenv()
 TOKEN_STORE = os.path.expanduser("~/.garmin_tokens.json")
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for your app
+CORS(app)  # Enable CORS for all routes
 
-# Configure SQLite database
+# Configure SQLite database for feedback
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///feedback.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -43,7 +43,6 @@ class Feedback(db.Model):
             "timestamp": self.timestamp.isoformat()
         }
 
-# Create database tables if they don't exist
 with app.app_context():
     db.create_all()
 
@@ -82,27 +81,26 @@ def init_api(email=None, password=None):
 def get_training_readiness(date_str):
     """
     Retrieve training readiness data for the given date.
-    Assumes training readiness is provided by a separate endpoint at the top level.
+    Assumes that GarminConnect provides a method get_training_data(date_str)
+    that returns a JSON object with a "score" field.
     """
     try:
-        # Attempt to call a method to get training readiness data.
-        # Replace this with the appropriate call if the method name is different.
-        training_data = garmin_client.get_training_readiness(date_str)
+        training_data = garmin_client.get_training_data(date_str)
+        # Log the raw training data for debugging
+        logger.info("Training data: %s", json.dumps(training_data, indent=4))
     except Exception as e:
-        logger.error("Error fetching training readiness data: %s", e)
+        logger.error("Error fetching training data: %s", e)
         training_data = None
 
     readiness = None
     if training_data:
         if isinstance(training_data, dict):
-            readiness = training_data.get("score") 
+            readiness = training_data.get("score")
         elif isinstance(training_data, list):
             for record in training_data:
-                if isinstance(record, dict):
-                    readiness = record.get("score") 
-                    if readiness is not None:
-                        break
-    #print(json.dumps(training_data, indent=4)) #dumps JSON 
+                if isinstance(record, dict) and record.get("score") is not None:
+                    readiness = record.get("score")
+                    break
     return readiness
 
 def get_recovery_metrics(date_str):
@@ -111,7 +109,7 @@ def get_recovery_metrics(date_str):
       - overallSleepScore
       - avgOvernightHrv
       - bodyBatteryChange
-    Also retrieves training readiness from a separate endpoint.
+    Also retrieve training readiness from the training data endpoint.
     """
     try:
         sleep_data = garmin_client.get_sleep_data(date_str)
@@ -140,26 +138,23 @@ def get_recovery_metrics(date_str):
                     if overall_value is not None:
                         break
 
-    # Retrieve training readiness separately
     training_readiness = get_training_readiness(date_str)
     return overall_value, avg_over_night_hrv, body_battery_change, training_readiness
 
 def determine_workout(overall, avg_hrv, battery_change, readiness):
     """
-    Revised rule-based decision tree for workout recommendations.
+    A simple rule-based decision tree for workout recommendations.
+    Adjust these thresholds as needed.
     
-    Assumptions (adjust thresholds as needed):
-    - A low overall sleep score (< 60) or low avgOvernightHrv (< 50) or low bodyBatteryChange (< 50)
-      indicates poor recovery, so recommend a recovery-focused (light) workout.
-    - Moderate values (overall 60-80, avgOvernightHrv 50-70, bodyBatteryChange 50-70) suggest a balanced session.
-    - High values (overall > 80, avgOvernightHrv > 70, bodyBatteryChange > 70) indicate good recovery,
-      so recommend a high-intensity workout.
+    Assumptions:
+      - Lower overall, avg HRV, or battery change, or low training readiness (<50) indicate poor recovery.
+      - Higher values indicate better recovery.
     """
-    if overall < 60 or avg_hrv < 50 or battery_change < 30 or (readiness is not None and readiness < 50):
+    if overall < 60 or avg_hrv < 50 or battery_change < 50 or (readiness is not None and readiness < 50):
         return "Recovery - Light Activity (e.g., yoga, walking, gentle stretching)"
-    elif overall >= 60 and overall <= 80 and avg_hrv >= 50 and avg_hrv <= 70 and battery_change >= 30 and battery_change <= 40 and (readiness is None or readiness >= 50):
+    elif overall >= 60 and overall <= 80 and avg_hrv >= 50 and avg_hrv <= 70 and battery_change >= 50 and battery_change <= 70 and (readiness is None or readiness >= 50):
         return "Moderate Workout - Balanced Cardio and Strength Session"
-    elif overall > 80 and avg_hrv > 70 and battery_change > 40 and (readiness is not None and readiness > 70):
+    elif overall > 80 and avg_hrv > 70 and battery_change > 70 and (readiness is not None and readiness > 70):
         return "High-Intensity Workout - Focus on Strength and Cardio"
     else:
         return "Moderate Workout - Adjust intensity as needed"
@@ -192,7 +187,6 @@ def ai_coach():
     today = date.today().isoformat()
     overall_value, avg_over_night_hrv, body_battery_change, training_readiness = get_recovery_metrics(today)
 
-    # Check that we have the required metrics for a recommendation
     if overall_value is None or avg_over_night_hrv is None or body_battery_change is None or training_readiness is None:
         logger.error("Required recovery data not found")
         return jsonify({"error": "Required recovery data not found"}), 404
@@ -203,14 +197,12 @@ def ai_coach():
     # AI recommendation via Gemini
     prompt = (
         f"Based on an overall sleep score of {overall_value}, an average overnight HRV of {avg_over_night_hrv}, "
-        f"a body battery change of {body_battery_change}, and a training readiness score of {training_readiness},"
-        f"in 120 words please reccomnded a run if my fully recovered pace was 6min/km for 5k. "
+        f"a body battery change of {body_battery_change}, and a training readiness score of {training_readiness}, "
+        f"please recommend an appropriate workout for today."
     )
-
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     gemini_model = "gemini-2.0-flash-lite-preview-02-05"
     gemini_client = genai.Client(api_key=gemini_api_key)
-
     try:
         response = gemini_client.models.generate_content(
             model=gemini_model,
@@ -227,7 +219,7 @@ def ai_coach():
         "overallSleepScore": overall_value,
         "avgOvernightHrv": avg_over_night_hrv,
         "bodyBatteryChange": body_battery_change,
-        "trainingReadiness": training_readiness 
+        "trainingReadiness": training_readiness
     })
 
 @app.route('/api/activities', methods=['GET'])
@@ -240,7 +232,6 @@ def get_activities():
         logger.error("Error fetching activities: %s", e)
         return jsonify({"error": "Failed to retrieve activities"}), 500
 
-# Endpoint to handle user feedback
 @app.route('/api/feedback', methods=['POST'])
 def post_feedback():
     """
@@ -267,9 +258,9 @@ def post_feedback():
         db.session.rollback()
         return jsonify({"error": "Failed to save feedback"}), 500
 
-# Optional endpoint to view feedback (for debugging)
 @app.route('/api/feedback', methods=['GET'])
 def get_feedback():
+    """Return all user feedback entries."""
     try:
         all_feedback = Feedback.query.all()
         return jsonify([fb.to_dict() for fb in all_feedback])

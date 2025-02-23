@@ -1,4 +1,3 @@
-// Dashboard.js
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import {
@@ -11,6 +10,7 @@ import {
   Snackbar,
   Grid
 } from '@mui/material';
+import Feedback from './Feedback';
 
 function Dashboard() {
   const [sleepData, setSleepData] = useState(null);
@@ -103,6 +103,9 @@ function Dashboard() {
                   <Typography variant="body1">
                     <strong>Body Battery Change:</strong> {sleepData.bodyBatteryChange || "N/A"}
                   </Typography>
+                  <Typography variant="body1">
+                    <strong>Training Readiness:</strong> {sleepData.trainingReadiness || "N/A"}
+                  </Typography>
                 </>
               ) : (
                 <Typography variant="body2">No sleep data available.</Typography>
@@ -166,6 +169,9 @@ function Dashboard() {
           </Card>
         </Grid>
       </Grid>
+
+      {/* Feedback Section */}
+      <Feedback />
 
       <Snackbar
         open={snackbarOpen}
