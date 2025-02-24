@@ -15,7 +15,7 @@ const theme = createTheme({
       paper: '#1f1f1f',    // Slightly lighter for cards and surfaces
     },
     text: {
-      primary: '#FED5D1',
+      primary: '#66cc99',
       secondary: '#aaaaaa',
     },
   },
@@ -31,7 +31,7 @@ const theme = createTheme({
         root: {
           textTransform: 'none',
           borderRadius: '8px',
-          primary: "#FED5D1"
+          primary: "##66cc99"
         },
       },
     },
