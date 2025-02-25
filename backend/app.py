@@ -1,14 +1,14 @@
 import os
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from garminconnect import Garmin
 from dotenv import load_dotenv
 import logging
 from google import genai  # Gemini API client
 import requests
-from flask_cors import CORS
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -23,8 +23,8 @@ TOKEN_STORE = os.path.expanduser("~/.garmin_tokens.json")
 app = Flask(__name__)
 CORS(app)  # Enable CORS for your app
 
-# Configure SQLite database
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///feedback.db'
+# Configure SQLite database for feedback and schedule caching
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app_cache.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -42,6 +42,18 @@ class Feedback(db.Model):
             "comment": self.comment,
             "timestamp": self.timestamp.isoformat()
         }
+
+# New ScheduleCache model for caching generated schedules
+class ScheduleCache(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    race_date = db.Column(db.String, nullable=False)
+    training_distance = db.Column(db.String, nullable=False)
+    race_phase = db.Column(db.String, nullable=False)
+    current_mileage = db.Column(db.Float, nullable=False)
+    run_days = db.Column(db.Integer, nullable=False)
+    long_run_day = db.Column(db.String, nullable=False)
+    schedule_json = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)    
 
 # Create database tables if they don't exist
 with app.app_context():
@@ -349,120 +361,189 @@ def generate_schedule():
     """
     Expected JSON input:
     {
-      "runDays": <integer>,       // total number of days per week the user plans to run
-      "longRunDay": <string>,       // e.g., "Saturday"
-      "trainingDistance": <string>  // e.g., "5K", "10K", "HalfMarathon", or "Marathon"
+      "runDays": <integer>,
+      "longRunDay": <string>,
+      "trainingDistance": <string>,   // e.g., "5K", "10K", "HalfMarathon", "Marathon"
+      "raceDate": <string>,           // e.g., "2025-04-15"
+      "racePhase": <string>,          // e.g., "base", "build", "peak", "taper", or "auto"
+      "currentMileage": <number>      // current weekly mileage in km (optional)
     }
     
-    Returns a schedule with each run day's:
+    Returns a full weekly schedule including:
       - Day
-      - WorkoutType (run type)
-      - WorkoutDetails (a brief description)
+      - WorkoutType
+      - WorkoutDetails
       - TargetPace (min/km)
       - Duration (min)
       - Distance (km)
     """
     data = request.get_json()
-    if not data or "runDays" not in data or "longRunDay" not in data or "trainingDistance" not in data:
-        return jsonify({"error": "runDays, longRunDay, and trainingDistance are required"}), 400
+    required_fields = ["runDays", "longRunDay", "trainingDistance", "raceDate", "racePhase"]
+    if not data or not all(field in data for field in required_fields):
+        return jsonify({"error": "runDays, longRunDay, trainingDistance, raceDate, and racePhase are required"}), 400
 
     run_days = data.get("runDays")
     long_run_day = data.get("longRunDay").capitalize()
     training_distance = data.get("trainingDistance")
-    
-    # Define week order
+    race_date = data.get("raceDate")
+    race_phase = data.get("racePhase").lower()
+    current_mileage = data.get("currentMileage")  # in km
+
     week_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     if long_run_day not in week_days:
         return jsonify({"error": f"Invalid longRunDay. Must be one of: {', '.join(week_days)}"}), 400
 
-    # Create list of available days (excluding the long run day)
-    available_days = [day for day in week_days if day != long_run_day]
-    if run_days - 1 > len(available_days):
-        return jsonify({"error": "Too many run days provided."}), 400
+    # Determine default weekly mileage based on trainingDistance
+    def get_default_weekly_mileage(training_distance):
+        mapping = {"5K": 40, "10K": 56, "HalfMarathon": 72, "Marathon": 88}
+        return mapping.get(training_distance, 40)
+    default_mileage = get_default_weekly_mileage(training_distance)
+    phase_multiplier = {"base": 0.9, "build": 1.0, "peak": 1.2, "taper": 0.8, "auto": 1.0}
+    multiplier = phase_multiplier.get(race_phase, 1.0)
+    weekly_mileage = current_mileage if current_mileage is not None else default_mileage * multiplier
 
-    # For simplicity, choose the first (runDays - 1) available days
-    selected_days = available_days[:run_days - 1]
-    # Combine with long run day and sort in week order
-    schedule_days = sorted(selected_days + [long_run_day], key=lambda d: week_days.index(d))
+    # Check for cached schedule (generated within last 24 hours)
+    cached_schedule = ScheduleCache.query.filter_by(
+        race_date=race_date,
+        training_distance=training_distance,
+        race_phase=race_phase,
+        run_days=run_days,
+        long_run_day=long_run_day,
+        current_mileage=weekly_mileage
+    ).order_by(ScheduleCache.timestamp.desc()).first()
+    if cached_schedule and (datetime.utcnow() - cached_schedule.timestamp) < timedelta(hours=24):
+        return jsonify({"schedule": json.loads(cached_schedule.schedule_json)})
 
-    # Retrieve race prediction for the specified training distance
+    # Generate running days: select run_days from week ensuring long_run_day is included
+    running_days = []
+    for day in week_days:
+        if len(running_days) < run_days:
+            running_days.append(day)
+    if long_run_day not in running_days:
+        running_days[-1] = long_run_day
+    running_days = sorted(running_days, key=lambda d: week_days.index(d))
+
     today_str = date.today().isoformat()
     race_prediction = get_race_prediction(garmin_client, today_str, training_distance)
     if not race_prediction:
         return jsonify({"error": "Race prediction data not found"}), 404
-
-    # Calculate running paces based on the race prediction and training distance
     running_paces = calculate_running_paces(race_prediction, training_distance)
 
-    # Helper functions to determine run duration and distance based on run type and training distance
-    def determine_run_duration(run_type, training_distance):
-        baseline = {
-            "5K": {"Recovery": 25, "Easy": 35, "Threshold": 30, "LongRun": 45},
-            "10K": {"Recovery": 30, "Easy": 45, "Threshold": 35, "LongRun": 60},
-            "HalfMarathon": {"Recovery": 40, "Easy": 60, "Threshold": 45, "LongRun": 90},
-            "Marathon": {"Recovery": 50, "Easy": 80, "Threshold": 60, "LongRun": 120}
-        }
-        if training_distance in baseline:
-            return baseline[training_distance].get(run_type, "N/A")
-        return "N/A"
+    # Helper functions to determine run duration and distance dynamically
+    def determine_run_duration(run_type, weekly_mileage):
+        # Assume an average pace of 6 min/km to convert mileage to minutes.
+        factors = {"Recovery": 0.10, "Easy": 0.15, "Threshold": 0.12, "LongRun": 0.25}
+        total_minutes = weekly_mileage * 6
+        return round(total_minutes * factors.get(run_type, 0))
 
-    def determine_run_distance(run_type, training_distance):
-        baseline_distance = {
-            "5K": {"Recovery": 4, "Easy": 5, "Threshold": 5, "LongRun": 6},
-            "10K": {"Recovery": 5, "Easy": 7, "Threshold": 7, "LongRun": 10},
-            "HalfMarathon": {"Recovery": 6, "Easy": 9, "Threshold": 8, "LongRun": 16},
-            "Marathon": {"Recovery": 8, "Easy": 12, "Threshold": 10, "LongRun": 20}
-        }
-        if training_distance in baseline_distance:
-            return baseline_distance[training_distance].get(run_type, "N/A")
-        return "N/A"
+    def determine_run_distance(run_type, weekly_mileage):
+        factors = {"Recovery": 0.10, "Easy": 0.15, "Threshold": 0.12, "LongRun": 0.25}
+        return round(weekly_mileage * factors.get(run_type, 0), 1)
 
-    # For non-long-run days, define a default cycle of run types
-    default_run_types = ["Recovery", "Easy", "Threshold"]
+    # For running days, assign run types; for non-running days, mark as Rest.
+    default_run_types = ["Recovery", "Threshold", "Easy"]
     schedule = []
     type_index = 0
-    for day in schedule_days:
-        if day == long_run_day:
-            run_type = "LongRun"
+
+    for day in week_days:
+        if day in running_days:
+            if day == long_run_day:
+                run_type = "LongRun"
+            else:
+                run_type = default_run_types[type_index % len(default_run_types)]
+                type_index += 1
+
+            target_pace = running_paces.get(run_type, "N/A")
+            def pace_str_to_minutes(pace_str):
+                try:
+                    parts = pace_str.split(':')
+                    return int(parts[0]) + int(parts[1]) / 60.0
+                except Exception as e:
+                    logger.error("Error parsing pace string: %s", e)
+                    return None
+            pace_minutes = pace_str_to_minutes(target_pace) if target_pace != "N/A" else None
+            run_distance = weekly_mileage * ({"Recovery": 0.10, "Easy": 0.15, "Threshold": 0.12, "LongRun": 0.25}.get(run_type, 0))
+            run_duration = round(run_distance * pace_minutes) if pace_minutes else "N/A"
+            if run_type == "LongRun":
+                details = "Long run: Steady pace for endurance building."
+            elif run_type == "Recovery":
+                details = "Recovery run: Easy pace to promote recovery."
+            elif run_type == "Easy":
+                details = "Easy run: Maintain a conversational pace."
+            elif run_type == "Threshold":
+                details = "Threshold run: Near race pace for lactate threshold improvement."
+            else:
+                details = ""
+            schedule.append({
+                "Day": day,
+                "WorkoutType": run_type,
+                "WorkoutDetails": details,
+                "TargetPace": target_pace + " per km" if target_pace != "N/A" else target_pace,
+                "Duration": f"{run_duration} minutes",
+                "Distance": f"{round(run_distance,1)} km"
+            })
         else:
-            run_type = default_run_types[type_index % len(default_run_types)]
-            type_index += 1
-        
-        target_pace = running_paces.get(run_type, "N/A")
-        duration = determine_run_duration(run_type, training_distance)
-        distance = determine_run_distance(run_type, training_distance)
-        # Default workout details can be added or customized further.
-        if run_type == "LongRun":
-            details = "Long run: Maintain a steady, comfortable pace for endurance."
-        elif run_type == "Recovery":
-            details = "Recovery run: Easy pace to promote recovery."
-        elif run_type == "Easy":
-            details = "Easy run: Steady pace, conversational effort."
-        elif run_type == "Threshold":
-            details = "Threshold run: Near race pace to improve lactate threshold."
-        else:
-            details = ""
-        
-        schedule.append({
-            "Day": day,
-            "WorkoutType": run_type,
-            "WorkoutDetails": details,
-            "TargetPace": target_pace + " per km" if target_pace != "N/A" else target_pace,
-            "Duration": f"{duration} minutes",
-            "Distance": f"{distance} km"
-        })
+            schedule.append({
+                "Day": day,
+                "WorkoutType": "Rest",
+                "WorkoutDetails": "Rest or cross-training day",
+                "TargetPace": "N/A",
+                "Duration": "N/A",
+                "Distance": "N/A"
+            })
+
+    # Cache the generated schedule
+    schedule_json = json.dumps(schedule)
+    new_cache = ScheduleCache(
+        race_date=race_date,
+        training_distance=training_distance,
+        race_phase=race_phase,
+        run_days=run_days,
+        long_run_day=long_run_day,
+        current_mileage=weekly_mileage,
+        schedule_json=schedule_json
+    )
+    db.session.add(new_cache)
+    db.session.commit()
 
     return jsonify({"schedule": schedule})
 
-@app.route('/api/activities', methods=['GET'])
-def get_activities():
-    """Return the latest 10 activities."""
+@app.route('/api/race-predictions', methods=['GET'])
+def race_predictions():
     try:
-        activities = garmin_client.get_activities(0, 10)
-        return jsonify(activities)
+        race_data = garmin_client.get_race_predictions()
+        logger.info("Race prediction data: %s", json.dumps(race_data, indent=4))
     except Exception as e:
-        logger.error("Error fetching activities: %s", e)
-        return jsonify({"error": "Failed to retrieve activities"}), 500
+        logger.error("Error fetching race predictions: %s", e)
+        return jsonify({"error": "Failed to retrieve race predictions"}), 500
+    output = {}
+    def seconds_to_time_str(seconds):
+        seconds = int(seconds)
+        if seconds < 3600:
+            minutes = seconds // 60
+            secs = seconds % 60
+            return f"{minutes}:{secs:02d}"
+        else:
+            hours = seconds // 3600
+            remainder = seconds % 3600
+            minutes = remainder // 60
+            secs = remainder % 60
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+    if isinstance(race_data, dict):
+        output["time5K"] = seconds_to_time_str(race_data.get("time5K")) if race_data.get("time5K") else "N/A"
+        output["time10K"] = seconds_to_time_str(race_data.get("time10K")) if race_data.get("time10K") else "N/A"
+        output["timeHalfMarathon"] = seconds_to_time_str(race_data.get("timeHalfMarathon")) if race_data.get("timeHalfMarathon") else "N/A"
+        output["timeMarathon"] = seconds_to_time_str(race_data.get("timeMarathon")) if race_data.get("timeMarathon") else "N/A"
+    elif isinstance(race_data, list):
+        for record in race_data:
+            if isinstance(record, dict) and record.get("time5K") is not None:
+                output["time5K"] = seconds_to_time_str(record.get("time5K"))
+                output["time10K"] = seconds_to_time_str(record.get("time10K")) if record.get("time10K") else "N/A"
+                output["timeHalfMarathon"] = seconds_to_time_str(record.get("timeHalfMarathon")) if record.get("timeHalfMarathon") else "N/A"
+                output["timeMarathon"] = seconds_to_time_str(record.get("timeMarathon")) if record.get("timeMarathon") else "N/A"
+                break
+
+    return jsonify(output)        
 
 # Endpoint to handle user feedback
 @app.route('/api/feedback', methods=['POST'])
