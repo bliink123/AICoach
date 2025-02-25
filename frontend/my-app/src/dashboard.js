@@ -25,9 +25,11 @@ const trainingDistances = [
 
 function Dashboard() {
   const [sleepData, setSleepData] = useState(null);
-  const [activities, setActivities] = useState([]);
+  const [racePredictions, setRacePredictions] = useState(null);
   const [aiData, setAiData] = useState(null);
-  const [trainingDistance, setTrainingDistance] = useState("5K");
+  const [trainingDistance, setTrainingDistance] = useState(() => {
+    return localStorage.getItem('trainingDistance') || "5K";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
@@ -36,13 +38,13 @@ function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [sleepRes, activitiesRes, aiRes] = await Promise.all([
+      const [sleepRes, raceRes, aiRes] = await Promise.all([
         axios.get('http://127.0.0.1:8080/api/overall-sleep'),
-        axios.get('http://127.0.0.1:8080/api/activities'),
+        axios.get('http://127.0.0.1:8080/api/race-predictions'),
         axios.get(`http://127.0.0.1:8080/api/ai-coach?distance=${trainingDistance}`)
       ]);
       setSleepData(sleepRes.data);
-      setActivities(activitiesRes.data);
+      setRacePredictions(raceRes.data);
       setAiData(aiRes.data);
     } catch (err) {
       console.error("Error fetching data:", err);
@@ -55,6 +57,7 @@ function Dashboard() {
 
   useEffect(() => {
     fetchData();
+    localStorage.setItem('trainingDistance', trainingDistance);
   }, [trainingDistance]);
 
   const handleRefresh = () => {
@@ -67,11 +70,10 @@ function Dashboard() {
 
   return (
     <Container sx={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
-      <Typography variant="h3" align="center" gutterBottom>
+      <Typography variant="h1" align="center" gutterBottom>
         AICOACH Dashboard
       </Typography>
 
-      {/* Training Distance Selector in Dashboard only */}
       <TextField
         select
         label="Training Distance"
@@ -87,13 +89,15 @@ function Dashboard() {
       </TextField>
 
       <Button
-        variant="contained"
+        variant="contained" size="large"
         onClick={handleRefresh}
         sx={{
-          backgroundColor: "#FED5D1",
-          color: "#000",
+          backgroundColor: "primary",
+          color: "primary",
           textTransform: "none",
-          marginBottom: "20px"
+          marginBottom: "20px",
+          marginLeft: "20px",
+          marginTop: "6px"
         }}
       >
         Refresh Data
@@ -112,9 +116,8 @@ function Dashboard() {
       )}
 
       <Grid container spacing={3}>
-        {/* Row 1: Sleep Data and Recent Activities */}
         <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
-          <Card variant="outlined" sx={{ width: '100%', flex: 1 }}>
+          <Card variant="outlined" elevation={8} sx={{ width: '100%', flex: 1 }}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Sleep & Recovery Data
@@ -142,31 +145,35 @@ function Dashboard() {
         </Grid>
 
         <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
-          <Card variant="outlined" sx={{ width: '100%', flex: 1 }}>
+          <Card variant="outlined" elevation={8} sx={{ width: '100%', flex: 1 }}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
-                Recent Activities
+                Race Predictions
               </Typography>
-              {activities && activities.length > 0 ? (
-                <ul style={{ listStyleType: "none", padding: 0 }}>
-                  {activities.map(activity => (
-                    <li key={activity.activityId}>
-                      <Typography variant="body1">
-                        {activity.activityName} (ID: {activity.activityId})
-                      </Typography>
-                    </li>
-                  ))}
-                </ul>
+              {racePredictions ? (
+                <>
+                  <Typography variant="body1">
+                    <strong>5K Prediction:</strong> {racePredictions.time5K ? racePredictions.time5K : "N/A"}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>10K Prediction:</strong> {racePredictions.time10K ? racePredictions.time10K : "N/A"}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>Half Marathon Prediction:</strong> {racePredictions.timeHalfMarathon ? racePredictions.timeHalfMarathon : "N/A"}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>Marathon Prediction:</strong> {racePredictions.timeMarathon ? racePredictions.timeMarathon : "N/A"}
+                  </Typography>
+                </>
               ) : (
-                <Typography variant="body2">No activities available.</Typography>
+                <Typography variant="body2">No race prediction data available.</Typography>
               )}
             </CardContent>
           </Card>
         </Grid>
 
-        {/* Row 2: Running Recommendations */}
         <Grid item xs={12}>
-          <Card variant="outlined" sx={{ width: '100%' }}>
+          <Card variant="outlined" elevation={3} sx={{ width: '100%' }}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Running Recommendations
@@ -200,11 +207,7 @@ function Dashboard() {
         </Grid>
       </Grid>
 
-      {/* Row 3: Scheduling Calendar */}
-      {/* Pass trainingDistance prop to Schedule component */}
       <Schedule trainingDistance={trainingDistance} />
-
-      {/* Feedback Section */}
       <Feedback />
 
       <Snackbar

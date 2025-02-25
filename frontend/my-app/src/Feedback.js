@@ -47,7 +47,7 @@ const Feedback = () => {
   };
 
   return (
-    <Box sx={{ marginTop: 4 }}>
+    <Box sx={{ marginTop: 4, marginLeft: 2 }}>
       <Typography variant="h5" gutterBottom>
         Submit Your Feedback
       </Typography>
@@ -71,9 +71,9 @@ const Feedback = () => {
           sx={{ marginRight: 2, marginBottom: 2, width: '50%' }}
         />
         <Button
-          variant="contained"
+          variant="contained" size="large"
           type="submit"
-          sx={{ backgroundColor: "#FED5D1", color: "#000" }}
+          sx={{ backgroundColor: "primary", color: "primary" }}
         >
           Submit Feedback
         </Button>
@@ -81,7 +81,7 @@ const Feedback = () => {
       {error && <Typography color="error">{error}</Typography>}
       {success && <Typography color="primary">{success}</Typography>}
       
-      <Typography variant="h6" gutterBottom sx={{ marginTop: 4 }}>
+      <Typography variant="h5" gutterBottom sx={{ marginTop: 4 }}>
         Feedback History
       </Typography>
       {feedbackList.length > 0 ? (
