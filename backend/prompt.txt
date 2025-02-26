@@ -14,3 +14,31 @@ such as "do we run and train legs on the same day?"
 Key features:
 Program - weekly calander 
 Adjust program based on health score
+
+
+
+
+AI PACE PROMPT:
+
+<instruction>
+Output only the requested data in JSON format. Do not include any extra text, introductions, or explanations.
+</instruction>
+
+<expected output>
+{
+  "Recovery": "8:00 per km",
+  "Easy": "7:10 per km",
+  "Threshold": "6:26 per km",
+  "LongRun": "7:25 per km"
+}
+</expected output>
+
+<prompt>
+You are a super fitness trainer.
+Can you help me with some rules for prescribing running paces.
+If my 5k race prediction is 30:54min, what paces should I opt for the following runs:
+-Recovery
+-Easy
+-Threshold
+-Long run (1.5-2x predicted race length)
+</prompt>
