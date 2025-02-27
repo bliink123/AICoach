@@ -8,7 +8,7 @@ function App() {
     <>
       <GlobalStyles styles={{
         body: {
-          background: 'linear-gradient(135deg, #141414, #3a3a3a)',
+          background: 'linear-gradient(0deg,rgb(0, 0, 0),rgba(0, 0, 0, 0.81))',
           backgroundRepeat: 'no-repeat',
           backgroundAttachment: 'fixed',
           backgroundSize: 'cover',

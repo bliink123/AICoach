@@ -11,6 +11,8 @@ node_modules/
 # Ignore environment variable files
 .env
 
+app_cache.db
+
 # Ignore OS-specific files
 .DS_Store
 Thumbs.db

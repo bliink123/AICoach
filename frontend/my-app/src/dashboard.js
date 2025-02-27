@@ -1,5 +1,5 @@
 // Dashboard.js
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import {
   Container,
@@ -15,6 +15,10 @@ import {
 } from '@mui/material';
 import Feedback from './Feedback';
 import Schedule from './Schedule';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm'
+
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8080'; // Use environment variable or default
 
 const trainingDistances = [
   { value: "5K", label: "5K" },
@@ -23,6 +27,8 @@ const trainingDistances = [
   { value: "Marathon", label: "Marathon" }
 ];
 
+const formatValue = (value) => value || "N/A";
+
 function Dashboard() {
   const [sleepData, setSleepData] = useState(null);
   const [racePredictions, setRacePredictions] = useState(null);
@@ -30,35 +36,69 @@ function Dashboard() {
   const [trainingDistance, setTrainingDistance] = useState(() => {
     return localStorage.getItem('trainingDistance') || "5K";
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState({
+    sleep: false,
+    race: false,
+    ai: false,
+  });
   const [error, setError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
-  const fetchData = async () => {
-    setLoading(true);
-    setError(null);
+  const fetchSleepData = useCallback(async () => {
+    setLoading(prev => ({ ...prev, sleep: true }));
     try {
-      const [sleepRes, raceRes, aiRes] = await Promise.all([
-        axios.get('http://127.0.0.1:8080/api/overall-sleep'),
-        axios.get('http://127.0.0.1:8080/api/race-predictions'),
-        axios.get(`http://127.0.0.1:8080/api/ai-coach?distance=${trainingDistance}`)
-      ]);
-      setSleepData(sleepRes.data);
-      setRacePredictions(raceRes.data);
-      setAiData(aiRes.data);
+      const response = await axios.get(`${API_BASE_URL}/api/overall-sleep`);
+      setSleepData(response.data);
     } catch (err) {
-      console.error("Error fetching data:", err);
-      setError("Error fetching data from the server.");
+      console.error("Error fetching sleep data:", err);
+      setError("Error fetching sleep data from the server.");
       setSnackbarOpen(true);
     } finally {
-      setLoading(false);
+      setLoading(prev => ({ ...prev, sleep: false }));
     }
-  };
+  }, []);
+
+  const fetchRacePredictions = useCallback(async () => {
+    setLoading(prev => ({ ...prev, race: true }));
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/race-predictions`);
+      setRacePredictions(response.data);
+    } catch (err) {
+      console.error("Error fetching race predictions:", err);
+      setError("Error fetching race predictions from the server.");
+      setSnackbarOpen(true);
+    } finally {
+      setLoading(prev => ({ ...prev, race: false }));
+    }
+  }, []);
+
+  const fetchAiData = useCallback(async (distance) => {
+    setLoading(prev => ({ ...prev, ai: true }));
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/ai-coach?distance=${distance}`);
+      setAiData(response.data);
+    } catch (err) {
+      console.error("Error fetching AI data:", err);
+      setError("Error fetching AI data from the server.");
+      setSnackbarOpen(true);
+    } finally {
+      setLoading(prev => ({ ...prev, ai: false }));
+    }
+  }, []);
+
+  const fetchData = useCallback(async () => {
+    setError(null);
+    await Promise.all([fetchSleepData(), fetchRacePredictions(), fetchAiData(trainingDistance)]);
+  }, [fetchSleepData, fetchRacePredictions, fetchAiData, trainingDistance]);
 
   useEffect(() => {
     fetchData();
     localStorage.setItem('trainingDistance', trainingDistance);
-  }, [trainingDistance]);
+  }, [fetchData, trainingDistance]);
+
+  useEffect(() => {
+    fetchAiData(trainingDistance);
+  }, [trainingDistance, fetchAiData]);
 
   const handleRefresh = () => {
     fetchData();
@@ -103,13 +143,13 @@ function Dashboard() {
         Refresh Data
       </Button>
 
-      {loading && (
+      {(loading.sleep || loading.race || loading.ai) && (
         <Grid container justifyContent="center" sx={{ margin: "20px 0" }}>
           <CircularProgress />
         </Grid>
       )}
 
-      {!loading && error && (
+      {!loading.sleep && !loading.race && !loading.ai && error && (
         <Typography variant="body1" color="error" align="center">
           {error}
         </Typography>
@@ -122,24 +162,27 @@ function Dashboard() {
               <Typography variant="h5" gutterBottom>
                 Sleep & Recovery Data
               </Typography>
-              {sleepData ? (
+              {loading.sleep ? (
+                <CircularProgress/>
+              ):(
+              sleepData ? (
                 <>
                   <Typography variant="body1">
-                    <strong>Overall Sleep Score:</strong> {sleepData.overallSleepScore || "N/A"}
+                    <strong>Overall Sleep Score:</strong> {formatValue(sleepData.overallSleepScore)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Avg Overnight HRV:</strong> {sleepData.avgOvernightHrv || "N/A"}
+                    <strong>Avg Overnight HRV:</strong> {formatValue(sleepData.avgOvernightHrv)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Body Battery Change:</strong> {sleepData.bodyBatteryChange || "N/A"}
+                    <strong>Body Battery Change:</strong> {formatValue(sleepData.bodyBatteryChange)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Training Readiness:</strong> {sleepData.trainingReadiness || "N/A"}
+                    <strong>Training Readiness:</strong> {formatValue(sleepData.trainingReadiness)}
                   </Typography>
                 </>
               ) : (
                 <Typography variant="body2">No sleep data available.</Typography>
-              )}
+              ))}
             </CardContent>
           </Card>
         </Grid>
@@ -150,24 +193,27 @@ function Dashboard() {
               <Typography variant="h5" gutterBottom>
                 Race Predictions
               </Typography>
-              {racePredictions ? (
+              {loading.race ? (
+                <CircularProgress/>
+              ):(
+              racePredictions ? (
                 <>
                   <Typography variant="body1">
-                    <strong>5K Prediction:</strong> {racePredictions.time5K ? racePredictions.time5K : "N/A"}
+                    <strong>5K Prediction:</strong> {formatValue(racePredictions.time5K)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>10K Prediction:</strong> {racePredictions.time10K ? racePredictions.time10K : "N/A"}
+                    <strong>10K Prediction:</strong> {formatValue(racePredictions.time10K)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Half Marathon Prediction:</strong> {racePredictions.timeHalfMarathon ? racePredictions.timeHalfMarathon : "N/A"}
+                    <strong>Half Marathon Prediction:</strong> {formatValue(racePredictions.timeHalfMarathon)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Marathon Prediction:</strong> {racePredictions.timeMarathon ? racePredictions.timeMarathon : "N/A"}
+                    <strong>Marathon Prediction:</strong> {formatValue(racePredictions.timeMarathon)}
                   </Typography>
                 </>
               ) : (
                 <Typography variant="body2">No race prediction data available.</Typography>
-              )}
+              ))}
             </CardContent>
           </Card>
         </Grid>
@@ -178,30 +224,41 @@ function Dashboard() {
               <Typography variant="h5" gutterBottom>
                 Running Recommendations
               </Typography>
-              {aiData ? (
+              {loading.ai ? (
+                <CircularProgress/>
+              ):(
+              aiData ? (
                 <>
                   <Typography variant="h6">
                     Rules-Based Run Type & Target Pace
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Run Type:</strong> {aiData.rulesBasedRunType || "N/A"}
+                    <strong>Run Type:</strong> {formatValue(aiData.rulesBasedRunType)}
                   </Typography>
                   <Typography variant="body1">
-                    <strong>Target Pace:</strong> {aiData.rulesBasedTargetPace || "N/A"}
+                    <strong>Target Pace:</strong> {formatValue(aiData.rulesBasedTargetPace)}
                   </Typography>
                   <Typography variant="h6" sx={{ marginTop: "10px" }}>
                     AI Coach Recommendation
                   </Typography>
-                  <Typography variant="body1">
-                    {aiData.aiCoachRecommendation}
-                  </Typography>
+                  <ReactMarkdown 
+                    children={aiData.aiCoachRecommendation} 
+                    remarkPlugins={[remarkGfm]} 
+                    components={{
+                        h1: ({node, ...props}) => <Typography variant="h4" component="h1" gutterBottom {...props} />,
+                        h2: ({node, ...props}) => <Typography variant="h5" component="h2" gutterBottom {...props} />,
+                        h3: ({node, ...props}) => <Typography variant="h6" component="h3" gutterBottom {...props} />,
+                        p: ({node, ...props}) => <Typography variant="body1" paragraph {...props} />,
+                        li: ({node, ...props}) => <Typography component="li" {...props} />,
+                    }}
+                />
                   <Typography variant="body2" color="textSecondary" sx={{ marginTop: "10px" }}>
-                    (Race Prediction: {aiData.racePrediction}, Overall Sleep Score: {aiData.overallSleepScore}, HRV: {aiData.avgOvernightHrv}, Body Battery Change: {aiData.bodyBatteryChange}, Training Readiness: {aiData.trainingReadiness})
+                    (Race Prediction: {formatValue(aiData.racePrediction)}, Overall Sleep Score: {formatValue(aiData.overallSleepScore)}, HRV: {formatValue(aiData.avgOvernightHrv)}, Body Battery Change: {formatValue(aiData.bodyBatteryChange)}, Training Readiness: {formatValue(aiData.trainingReadiness)})
                   </Typography>
                 </>
               ) : (
                 <Typography variant="body2">No recommendations available.</Typography>
-              )}
+              ))}
             </CardContent>
           </Card>
         </Grid>

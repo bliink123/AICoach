@@ -16,6 +16,8 @@ import {
   CircularProgress
 } from '@mui/material';
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8080';
+
 const daysOfWeek = [
   "Monday",
   "Tuesday",
@@ -34,13 +36,28 @@ const racePhases = [
   { value: "auto", label: "Auto" }
 ];
 
+const experienceLevels = [
+    { value: "beginner", label: "Beginner" },
+    { value: "intermediate", label: "Intermediate" },
+    { value: "advanced", label: "Advanced" }
+];
+
+const trainingGoals = [
+    { value: "finish", label: "Finish" },
+    { value: "pr", label: "PR" },
+    { value: "compete", label: "Compete" }
+];
+
 const Schedule = ({ trainingDistance }) => {
   const [runDays, setRunDays] = useState('');
   const [longRunDay, setLongRunDay] = useState('');
   const [raceDate, setRaceDate] = useState('');
   const [racePhase, setRacePhase] = useState('auto');
   const [currentMileage, setCurrentMileage] = useState('');
+  const [experienceLevel, setExperienceLevel] = useState('intermediate');
+  const [trainingGoal, setTrainingGoal] = useState('pr');
   const [schedule, setSchedule] = useState([]);
+  const [scheduleSummary, setScheduleSummary] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -54,17 +71,22 @@ const Schedule = ({ trainingDistance }) => {
           trainingDistance,
           raceDate: storedParams.raceDate || new Date().toISOString().split('T')[0],
           racePhase: storedParams.racePhase || "auto",
-          currentMileage: storedParams.currentMileage ? parseFloat(storedParams.currentMileage) : 40
+          currentMileage: storedParams.currentMileage ? parseFloat(storedParams.currentMileage) : 40,
+          experienceLevel: storedParams.experienceLevel || "intermediate",
+          trainingGoal: storedParams.trainingGoal || "pr"
         };
 
-        const response = await axios.post('http://127.0.0.1:8080/api/schedule', payload);
+        const response = await axios.post(`${API_BASE_URL}/api/schedule`, payload);
         setSchedule(response.data.schedule);
+        setScheduleSummary(response.data.summary);
 
         setRunDays(String(payload.runDays));
         setLongRunDay(payload.longRunDay);
         setRaceDate(payload.raceDate);
         setRacePhase(payload.racePhase);
         setCurrentMileage(String(payload.currentMileage));
+        setExperienceLevel(payload.experienceLevel);
+        setTrainingGoal(payload.trainingGoal);
 
         setError('');
       } catch (err) {
@@ -87,12 +109,15 @@ const Schedule = ({ trainingDistance }) => {
       trainingDistance,
       raceDate,
       racePhase,
-      currentMileage: currentMileage ? parseFloat(currentMileage) : undefined
+      currentMileage: currentMileage ? parseFloat(currentMileage) : undefined,
+      experienceLevel,
+      trainingGoal
     };
 
     try {
-      const response = await axios.post('http://127.0.0.1:8080/api/schedule', payload);
+      const response = await axios.post(`${API_BASE_URL}/api/schedule`, payload);
       setSchedule(response.data.schedule);
+      setScheduleSummary(response.data.summary);
       setError('');
 
       localStorage.setItem('scheduleParams', JSON.stringify(payload));
@@ -166,6 +191,34 @@ const Schedule = ({ trainingDistance }) => {
           onChange={(e) => setCurrentMileage(e.target.value)}
           sx={{ width: 200 }}
         />
+        <TextField
+          select
+          label="Experience Level"
+          value={experienceLevel}
+          onChange={(e) => setExperienceLevel(e.target.value)}
+          required
+          sx={{ width: 200 }}
+        >
+            {experienceLevels.map((level) => (
+                <MenuItem key={level.value} value={level.value}>
+                    {level.label}
+                </MenuItem>
+            ))}
+        </TextField>
+        <TextField
+            select
+            label="Training Goal"
+            value={trainingGoal}
+            onChange={(e) => setTrainingGoal(e.target.value)}
+            required
+            sx={{ width: 200 }}
+        >
+            {trainingGoals.map((goal) => (
+                <MenuItem key={goal.value} value={goal.value}>
+                    {goal.label}
+                </MenuItem>
+            ))}
+        </TextField>
         <Button type="submit" variant="contained" color="primary">
           Generate Schedule
         </Button>
@@ -176,6 +229,16 @@ const Schedule = ({ trainingDistance }) => {
         </Typography>
       )}
       {loading && <CircularProgress />}
+      {scheduleSummary && (
+          <Typography variant="body1" sx={{ marginBottom: 2 }}>
+              <strong>Weekly Mileage:</strong> {scheduleSummary.weeklyMileage} km, 
+              <strong>Weekly Intensity:</strong> {scheduleSummary.weeklyIntensity}, 
+              <strong>Current Week:</strong> {scheduleSummary.currentWeek},
+              <strong>Total Weeks:</strong> {scheduleSummary.totalWeeks},
+              <strong>Race Phase:</strong> {scheduleSummary.racePhase},
+              <strong>Weeks Until Race:</strong> {scheduleSummary.weeksUntilRace}
+          </Typography>
+      )}
       {schedule.length > 0 && (
         <Paper sx={{ overflowX: 'auto' }}>
           <Table>
