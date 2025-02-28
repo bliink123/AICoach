@@ -196,24 +196,24 @@ function Dashboard() {
               {loading.race ? (
                 <CircularProgress/>
               ):(
-              racePredictions ? (
-                <>
-                  <Typography variant="body1">
-                    <strong>5K Prediction:</strong> {formatValue(racePredictions.time5K)}
-                  </Typography>
-                  <Typography variant="body1">
-                    <strong>10K Prediction:</strong> {formatValue(racePredictions.time10K)}
-                  </Typography>
-                  <Typography variant="body1">
-                    <strong>Half Marathon Prediction:</strong> {formatValue(racePredictions.timeHalfMarathon)}
-                  </Typography>
-                  <Typography variant="body1">
-                    <strong>Marathon Prediction:</strong> {formatValue(racePredictions.timeMarathon)}
-                  </Typography>
-                </>
-              ) : (
-                <Typography variant="body2">No race prediction data available.</Typography>
-              ))}
+                racePredictions ? (
+                  <>
+                    <Typography variant="body1">
+                      <strong>5K Prediction:</strong> {formatValue(racePredictions.time5K)}
+                    </Typography>
+                    <Typography variant="body1">
+                      <strong>10K Prediction:</strong> {formatValue(racePredictions.time10K)}
+                    </Typography>
+                    <Typography variant="body1">
+                      <strong>Half Marathon Prediction:</strong> {formatValue(racePredictions.timeHalfMarathon)}
+                    </Typography>
+                    <Typography variant="body1">
+                      <strong>Marathon Prediction:</strong> {formatValue(racePredictions.timeMarathon)}
+                    </Typography>
+                  </>
+                ) : (
+                  <Typography variant="body2">No race prediction data available.</Typography>
+                ))}
             </CardContent>
           </Card>
         </Grid>
