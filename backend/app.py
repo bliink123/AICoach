@@ -480,7 +480,7 @@ def improve_run_schedule_rule_based(workout_types, long_run_day, week_days, run_
     print(f"Available days after preferred assignment: {available_days}") # DEBUG
 
     while len(rest_days) < rest_days_needed and available_days:
-        rest_days.append(available_days.pop(0))
+        rest_days.append(available_days.pop())
         print(f"  Assigned remaining rest day: {rest_days[-1]}, rest_days: {rest_days}, available_days: {available_days}") # DEBUG
     print(f"Final rest days assigned: {rest_days}") # DEBUG
 
@@ -580,7 +580,8 @@ def ai_coach():
         return jsonify({"error": "Invalid raceDate format. Use YYYY-MM-DD."}), 400
     weeks_until_race = max(0, (race_date_obj - date.today()).days // 7)
     total_weeks = get_training_plan_length(training_distance, experience_level)
-    current_week = max(1, total_weeks - weeks_until_race)
+    #current_week = max(1, total_weeks - weeks_until_race)
+    current_week = 1
     default_mileage = get_default_weekly_mileage(training_distance, experience_level, training_goal)
     phase_multiplier = calculate_phase_multiplier(race_phase, current_week, total_weeks)
     weekly_mileage = default_mileage * phase_multiplier
@@ -589,22 +590,21 @@ def ai_coach():
     run_type = determine_run_type(overall_value, avg_over_night_hrv, body_battery_change, training_readiness)
     target_pace = running_paces.get(run_type) if running_paces and run_type in running_paces else None
 
-    #the line below was wrong
-    #base_pace_seconds = time_str_to_seconds(race_prediction.get("predicted_5k_pace")) / {"5K": 5, "10K": 10, "HalfMarathon": 21.1, "Marathon": 42.2}.get(training_distance, 5)
     base_pace_seconds = time_str_to_seconds(race_prediction) / {"5K": 5, "10K": 10, "HalfMarathon": 21.1, "Marathon": 42.2}.get(training_distance, 5)
     base_pace_str = seconds_to_time_str(base_pace_seconds)
     prompt = (
         f"You are a super fitness coach. My {training_distance} race prediction is {race_prediction} "
         f"(approximately {base_pace_str} per km). My recovery metrics are: overall sleep score {overall_value}, "
         f"average overnight HRV {avg_over_night_hrv}, body battery change {body_battery_change}, and training readiness {training_readiness}. "
-        f"Additionally, I am in week {current_week} of a {total_weeks}-week training plan aimed at {training_goal} (experience level: {experience_level}). "
+        f"Additionally, I am looking for a recommendation for what my workout should be today, based on the recovery data you have. "
+        f"I am in week {current_week} of a {total_weeks}-week training plan aimed at {training_goal} (experience level: {experience_level}). "
         f"My race phase is '{race_phase}', and my recommended weekly mileage is approximately {round(weekly_mileage,1)} km. "
-        f"Based on this information, please recommend one run type (Recovery, Easy, Threshold, or Long Run) with the appropriate pace, duration, "
+        f"Based on this information, in 400 words, please recommend one run type (Recovery, Easy, Threshold, or Long Run) with the appropriate pace, duration, "
         f"and any adjustments to my training plan to improve performance while ensuring adequate recovery."
     )
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
-    gemini_model = "gemini-2.0-flash-lite-preview-02-05"
+    gemini_model = "gemini-2.0-flash-lite"
     gemini_client = genai.Client(api_key=gemini_api_key)
 
     try:
@@ -757,7 +757,9 @@ def generate_schedule_endpoint():
         "schedule": schedule,
         "summary": schedule_summary
     }
+    
     schedule_json = json.dumps(full_response)
+    '''
     new_cache = ScheduleCache(
         race_date=race_date,
         training_distance=training_distance,
@@ -769,7 +771,7 @@ def generate_schedule_endpoint():
         training_goal=training_goal,
         schedule_json=schedule_json
     )
-    db.session.add(new_cache)
+    db.session.add(new_cache)'''
     db.session.commit()
 
     return jsonify(full_response)
