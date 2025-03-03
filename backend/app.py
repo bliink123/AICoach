@@ -1,13 +1,20 @@
 import os
 import json
 from datetime import date, timedelta, datetime
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, session, redirect, url_for
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_
 from garminconnect import Garmin
 from dotenv import load_dotenv
 import logging
 from google import genai  # Gemini API client
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_login import UserMixin
+from flask_login import LoginManager
+from flask_login import login_user, logout_user, current_user, login_required
+
+
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -20,7 +27,12 @@ load_dotenv()
 TOKEN_STORE = os.path.expanduser("~/.garmin_tokens.json")
 
 app = Flask(__name__)
-CORS(app)
+app.secret_key = os.getenv("SECRET_KEY", "your-default-secret-key")
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = False  #Set to True when we depoly
+app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
+CORS(app, supports_credentials=True)
+
 
 # Configure SQLite database for caching and feedback
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app_cache.db'
@@ -57,12 +69,52 @@ class ScheduleCache(db.Model):
     schedule_json = db.Column(db.Text, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+        
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+# Now that all models are defined, create the tables:
 with app.app_context():
     db.create_all()
 
 # -------------------------
 # Authentication & API Initialization
 # -------------------------
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = None  # Disable default redirection
+
+@login_manager.user_loader
+def load_user(user_id):
+    logger.info(f"load_user called with user_id: {user_id}")
+    try:
+        user_id = int(user_id)
+        user = User.query.get(user_id)
+        if user:
+            logger.info(f"User found: {user.username}")
+        else:
+            logger.info("User not found")
+        return user
+    except (ValueError, TypeError) as e:
+        logger.error(f"Invalid user_id: {user_id} - {e}")
+        return None  # Handle the case where user_id is invalid
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    return jsonify({"error": "Unauthorized access"}), 401
+
 def get_credentials():
     email = input("Enter your Garmin email: ")
     password = input("Enter your Garmin password: ")
@@ -509,7 +561,67 @@ def improve_run_schedule_rule_based(workout_types, long_run_day, week_days, run_
 # -------------------------
 # API Endpoints
 # -------------------------
+
+# Create the /register endpoint:
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    if not data or 'username' not in data or 'email' not in data or 'password' not in data:
+        response = jsonify({"error": "Missing required fields"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 400
+    
+    if User.query.filter(or_(User.username == data['username'], User.email == data['email'])).first():
+        response = jsonify({"error": "User already exists"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 400
+    
+    try:
+        new_user = User(username=data['username'], email=data['email'])
+        new_user.set_password(data['password'])
+        db.session.add(new_user)
+        db.session.commit()
+    except Exception as e:
+        logger.error("Registration error: %s", e)
+        response = jsonify({"error": "Registration failed"})
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        return response, 500
+    
+    response = jsonify({"message": "User registered successfully"})
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    return response, 201
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    username = data.get('username')
+    password = data.get('password')
+
+    user = User.query.filter_by(username=username).first()
+    if user and user.check_password(password):
+        login_user(user, remember=True)  # Persistent login using Flask-Login
+        session['user_id'] = user.id # add this line back in
+        return jsonify({"id": user.id, "username": user.username, "email": user.email}), 200 # return the user on success
+    return jsonify({"error": "Invalid credentials"}), 401
+
+@app.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    logout_user()
+    session.pop('user_id', None)  # Remove user ID from the session
+    return jsonify({"message": "Logged out successfully"}), 200
+
+@app.route('/me', methods=['GET'])
+@login_required
+def get_current_user():
+    return jsonify({
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email
+    })
+
 @app.route('/api/overall-sleep', methods=['GET'])
+@login_required
 def overall_sleep():
     today_str = date.today().isoformat()
     overall_value, avg_over_night_hrv, body_battery_change, training_readiness = get_recovery_metrics(today_str)
@@ -521,6 +633,7 @@ def overall_sleep():
     })
 
 @app.route('/api/race-predictions', methods=['GET'])
+@login_required
 def race_predictions():
     try:
         race_data = garmin_client.get_race_predictions()
@@ -560,6 +673,7 @@ def race_predictions():
     return jsonify(output)
 
 @app.route('/api/ai-coach', methods=['GET'])
+@login_required
 def ai_coach():
     training_distance = request.args.get("distance", "5K")
     experience_level = request.args.get("experienceLevel", "intermediate").lower()
@@ -637,6 +751,7 @@ def ai_coach():
     })
 
 @app.route('/api/schedule', methods=['POST'])
+@login_required
 def generate_schedule_endpoint():
     data = request.get_json()
     required_fields = ["runDays", "longRunDay", "trainingDistance", "raceDate", "racePhase"]
@@ -759,7 +874,7 @@ def generate_schedule_endpoint():
     }
     
     schedule_json = json.dumps(full_response)
-    '''
+    
     new_cache = ScheduleCache(
         race_date=race_date,
         training_distance=training_distance,
@@ -771,7 +886,7 @@ def generate_schedule_endpoint():
         training_goal=training_goal,
         schedule_json=schedule_json
     )
-    db.session.add(new_cache)'''
+    db.session.add(new_cache)
     db.session.commit()
 
     return jsonify(full_response)
@@ -811,4 +926,4 @@ if __name__ == '__main__':
     GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
     GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
     garmin_client = init_api(GARMIN_USERNAME, GARMIN_PASSWORD)
-    app.run(debug=True, port=8080)
+    app.run(debug=True, port=8080, host="localhost")

@@ -1,5 +1,4 @@
-// Dashboard.js
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import axios from 'axios';
 import {
   Container,
@@ -16,9 +15,10 @@ import {
 import Feedback from './Feedback';
 import Schedule from './Schedule';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm'
+import remarkGfm from 'remark-gfm';
+import { AuthContext } from './AuthContext';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8080'; // Use environment variable or default
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8080';
 
 const trainingDistances = [
   { value: "5K", label: "5K" },
@@ -30,21 +30,16 @@ const trainingDistances = [
 const formatValue = (value) => value || "N/A";
 
 function Dashboard() {
+  const { user, logout } = useContext(AuthContext);
   const [sleepData, setSleepData] = useState(null);
   const [racePredictions, setRacePredictions] = useState(null);
   const [aiData, setAiData] = useState(null);
-  const [trainingDistance, setTrainingDistance] = useState(() => {
-    return localStorage.getItem('trainingDistance') || "5K";
-  });
-  const [loading, setLoading] = useState({
-    sleep: false,
-    race: false,
-    ai: false,
-  });
+  const [trainingDistance, setTrainingDistance] = useState(() => localStorage.getItem('trainingDistance') || "5K");
+  const [loading, setLoading] = useState({ sleep: false, race: false, ai: false });
   const [error, setError] = useState(null);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
 
-  const fetchSleepData = useCallback(async () => {
+  const fetchSleepData = async () => {
     setLoading(prev => ({ ...prev, sleep: true }));
     try {
       const response = await axios.get(`${API_BASE_URL}/api/overall-sleep`);
@@ -56,9 +51,9 @@ function Dashboard() {
     } finally {
       setLoading(prev => ({ ...prev, sleep: false }));
     }
-  }, []);
+  };
 
-  const fetchRacePredictions = useCallback(async () => {
+  const fetchRacePredictions = async () => {
     setLoading(prev => ({ ...prev, race: true }));
     try {
       const response = await axios.get(`${API_BASE_URL}/api/race-predictions`);
@@ -70,9 +65,9 @@ function Dashboard() {
     } finally {
       setLoading(prev => ({ ...prev, race: false }));
     }
-  }, []);
+  };
 
-  const fetchAiData = useCallback(async (distance) => {
+  const fetchAiData = async (distance) => {
     setLoading(prev => ({ ...prev, ai: true }));
     try {
       const response = await axios.get(`${API_BASE_URL}/api/ai-coach?distance=${distance}`);
@@ -84,21 +79,17 @@ function Dashboard() {
     } finally {
       setLoading(prev => ({ ...prev, ai: false }));
     }
-  }, []);
+  };
 
-  const fetchData = useCallback(async () => {
+  const fetchData = async () => {
     setError(null);
     await Promise.all([fetchSleepData(), fetchRacePredictions(), fetchAiData(trainingDistance)]);
-  }, [fetchSleepData, fetchRacePredictions, fetchAiData, trainingDistance]);
+  };
 
   useEffect(() => {
     fetchData();
     localStorage.setItem('trainingDistance', trainingDistance);
-  }, [fetchData, trainingDistance]);
-
-  useEffect(() => {
-    fetchAiData(trainingDistance);
-  }, [trainingDistance, fetchAiData]);
+  }, [trainingDistance]);
 
   const handleRefresh = () => {
     fetchData();
@@ -109,10 +100,14 @@ function Dashboard() {
   };
 
   return (
-    <Container sx={{ padding: "20px", fontFamily: "Arial, sans-serif" }}>
+    <Container sx={{ padding: "20px" }}>
       <Typography variant="h1" align="center" gutterBottom>
         AICOACH Dashboard
       </Typography>
+
+      <Button variant="outlined" onClick={logout} sx={{ marginBottom: "20px" }}>
+        Logout
+      </Button>
 
       <TextField
         select
@@ -132,8 +127,6 @@ function Dashboard() {
         variant="contained" size="large"
         onClick={handleRefresh}
         sx={{
-          backgroundColor: "primary",
-          color: "primary",
           textTransform: "none",
           marginBottom: "20px",
           marginLeft: "20px",
@@ -156,16 +149,15 @@ function Dashboard() {
       )}
 
       <Grid container spacing={3}>
-        <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
-          <Card variant="outlined" elevation={8} sx={{ width: '100%', flex: 1 }}>
+        <Grid item xs={12} md={6}>
+          <Card variant="outlined" elevation={8}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Sleep & Recovery Data
               </Typography>
               {loading.sleep ? (
-                <CircularProgress/>
-              ):(
-              sleepData ? (
+                <CircularProgress />
+              ) : sleepData ? (
                 <>
                   <Typography variant="body1">
                     <strong>Overall Sleep Score:</strong> {formatValue(sleepData.overallSleepScore)}
@@ -182,83 +174,77 @@ function Dashboard() {
                 </>
               ) : (
                 <Typography variant="body2">No sleep data available.</Typography>
-              ))}
+              )}
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={6} sx={{ display: 'flex' }}>
-          <Card variant="outlined" elevation={8} sx={{ width: '100%', flex: 1 }}>
+        <Grid item xs={12} md={6}>
+          <Card variant="outlined" elevation={8}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Race Predictions
               </Typography>
               {loading.race ? (
-                <CircularProgress/>
-              ):(
-                racePredictions ? (
-                  <>
-                    <Typography variant="body1">
-                      <strong>5K Prediction:</strong> {formatValue(racePredictions.time5K)}
-                    </Typography>
-                    <Typography variant="body1">
-                      <strong>10K Prediction:</strong> {formatValue(racePredictions.time10K)}
-                    </Typography>
-                    <Typography variant="body1">
-                      <strong>Half Marathon Prediction:</strong> {formatValue(racePredictions.timeHalfMarathon)}
-                    </Typography>
-                    <Typography variant="body1">
-                      <strong>Marathon Prediction:</strong> {formatValue(racePredictions.timeMarathon)}
-                    </Typography>
-                  </>
-                ) : (
-                  <Typography variant="body2">No race prediction data available.</Typography>
-                ))}
+                <CircularProgress />
+              ) : racePredictions ? (
+                <>
+                  <Typography variant="body1">
+                    <strong>5K Prediction:</strong> {formatValue(racePredictions.time5K)}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>10K Prediction:</strong> {formatValue(racePredictions.time10K)}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>Half Marathon Prediction:</strong> {formatValue(racePredictions.timeHalfMarathon)}
+                  </Typography>
+                  <Typography variant="body1">
+                    <strong>Marathon Prediction:</strong> {formatValue(racePredictions.timeMarathon)}
+                  </Typography>
+                </>
+              ) : (
+                <Typography variant="body2">No race prediction data available.</Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>
 
         <Grid item xs={12}>
-          <Card variant="outlined" elevation={3} sx={{ width: '100%' }}>
+          <Card variant="outlined" elevation={3}>
             <CardContent>
               <Typography variant="h5" gutterBottom>
                 Running Recommendations
               </Typography>
               {loading.ai ? (
-                <CircularProgress/>
-              ):(
-              aiData ? (
+                <CircularProgress />
+              ) : aiData ? (
                 <>
-                  <Typography variant="h6">
-                    Rules-Based Run Type & Target Pace
-                  </Typography>
+                  <Typography variant="h6">Rules-Based Run Type & Target Pace</Typography>
                   <Typography variant="body1">
                     <strong>Run Type:</strong> {formatValue(aiData.rulesBasedRunType)}
                   </Typography>
                   <Typography variant="body1">
                     <strong>Target Pace:</strong> {formatValue(aiData.rulesBasedTargetPace)}
                   </Typography>
-                  <Typography variant="h6" sx={{ marginTop: "10px" }}>
-                    AI Coach Recommendation
-                  </Typography>
-                  <ReactMarkdown 
-                    children={aiData.aiCoachRecommendation} 
-                    remarkPlugins={[remarkGfm]} 
+                  <Typography variant="h6" sx={{ marginTop: "10px" }}>AI Coach Recommendation</Typography>
+                  <ReactMarkdown
+                    children={aiData.aiCoachRecommendation}
+                    remarkPlugins={[remarkGfm]}
                     components={{
-                        h1: ({node, ...props}) => <Typography variant="h4" component="h1" gutterBottom {...props} />,
-                        h2: ({node, ...props}) => <Typography variant="h5" component="h2" gutterBottom {...props} />,
-                        h3: ({node, ...props}) => <Typography variant="h6" component="h3" gutterBottom {...props} />,
-                        p: ({node, ...props}) => <Typography variant="body1" paragraph {...props} />,
-                        li: ({node, ...props}) => <Typography component="li" {...props} />,
+                      h1: ({ node, ...props }) => <Typography variant="h4" component="h1" gutterBottom {...props} />,
+                      h2: ({ node, ...props }) => <Typography variant="h5" component="h2" gutterBottom {...props} />,
+                      h3: ({ node, ...props }) => <Typography variant="h6" component="h3" gutterBottom {...props} />,
+                      p: ({ node, ...props }) => <Typography variant="body1" paragraph {...props} />,
+                      li: ({ node, ...props }) => <Typography component="li" {...props} />,
                     }}
-                />
+                  />
                   <Typography variant="body2" color="textSecondary" sx={{ marginTop: "10px" }}>
                     (Race Prediction: {formatValue(aiData.racePrediction)}, Overall Sleep Score: {formatValue(aiData.overallSleepScore)}, HRV: {formatValue(aiData.avgOvernightHrv)}, Body Battery Change: {formatValue(aiData.bodyBatteryChange)}, Training Readiness: {formatValue(aiData.trainingReadiness)})
                   </Typography>
                 </>
               ) : (
                 <Typography variant="body2">No recommendations available.</Typography>
-              ))}
+              )}
             </CardContent>
           </Card>
         </Grid>
