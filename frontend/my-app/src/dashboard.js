@@ -105,10 +105,6 @@ function Dashboard() {
         AICOACH Dashboard
       </Typography>
 
-      <Button variant="outlined" onClick={logout} sx={{ marginBottom: "20px" }}>
-        Logout
-      </Button>
-
       <TextField
         select
         label="Training Distance"
@@ -134,6 +130,10 @@ function Dashboard() {
         }}
       >
         Refresh Data
+      </Button>
+
+      <Button variant="outlined" size='large' onClick={logout} sx={{ marginLeft: "20px", marginBottom: "18px", alignItems: 'flex-end', alignSelf: 'stretch' }}>
+        Logout
       </Button>
 
       {(loading.sleep || loading.race || loading.ai) && (

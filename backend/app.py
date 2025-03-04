@@ -30,8 +30,10 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "your-default-secret-key")
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SECURE'] = False  #Set to True when we depoly
-app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
-CORS(app, supports_credentials=True)
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+app.config['SESSION_TYPE'] = 'filesystem'
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
 
 
 # Configure SQLite database for caching and feedback
@@ -599,9 +601,10 @@ def login():
 
     user = User.query.filter_by(username=username).first()
     if user and user.check_password(password):
-        login_user(user, remember=True)  # Persistent login using Flask-Login
-        session['user_id'] = user.id # add this line back in
-        return jsonify({"id": user.id, "username": user.username, "email": user.email}), 200 # return the user on success
+        # Make the session permanent
+        session.permanent = True
+        login_user(user, remember=True)
+        return jsonify({"id": user.id, "username": user.username, "email": user.email}), 200
     return jsonify({"error": "Invalid credentials"}), 401
 
 @app.route('/logout', methods=['POST'])

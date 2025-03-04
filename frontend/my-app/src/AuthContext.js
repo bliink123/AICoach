@@ -6,25 +6,32 @@ export const AuthContext = createContext();
 export const AuthProvider = ({ children }) => {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [user, setUser] = useState(null);
+    const [loading, setLoading] = useState(true); // Add loading state
 
     const loadUser = async () => {
-        const storedUser = localStorage.getItem('user');
-        if (storedUser) {
-            setUser(JSON.parse(storedUser));
-            setIsAuthenticated(true);
-        }
+        setLoading(true); // Start loading
         try {
-            const response = await axios.get(`${process.env.REACT_APP_API_BASE_URL}/me`);
+            // First check if we have a user in localStorage
+            const storedUser = localStorage.getItem('user');
+            if (storedUser) {
+                setUser(JSON.parse(storedUser));
+                setIsAuthenticated(true);
+            }
+            
+            // Then verify with the server
+            const response = await axios.get('http://localhost:8080/me');
             setUser(response.data);
             setIsAuthenticated(true);
             localStorage.setItem('user', JSON.stringify(response.data));
         } catch (err) {
+            console.error("Authentication error:", err);
             setUser(null);
             setIsAuthenticated(false);
-            localStorage.removeItem('user'); // Remove user from local storage if not authenticated.
-            console.error("User not authenticated", err);
+            localStorage.removeItem('user');
+        } finally {
+            setLoading(false); // End loading regardless of outcome
         }
-    };
+    }
 
     useEffect(() => {
         loadUser();
@@ -32,7 +39,7 @@ export const AuthProvider = ({ children }) => {
 
     const login = async (username, password) => {
         try {
-            const response = await axios.post(`${process.env.REACT_APP_API_BASE_URL}/login`, { username, password });
+            const response = await axios.post('http://localhost:8080/login', { username, password });
             setUser(response.data);
             setIsAuthenticated(true);
             localStorage.setItem('user', JSON.stringify(response.data));
@@ -44,7 +51,7 @@ export const AuthProvider = ({ children }) => {
 
     const register = async (username, email, password) => {
         try {
-            const response = await axios.post(`${process.env.REACT_APP_API_BASE_URL}/register`, { username, email, password });
+            const response = await axios.post('http://localhost:8080/register', { username, email, password });
             return response.data;
         } catch (error) {
             throw error;
@@ -53,7 +60,7 @@ export const AuthProvider = ({ children }) => {
 
     const logout = async () => {
         try {
-            await axios.post(`${process.env.REACT_APP_API_BASE_URL}/logout`);
+            await axios.post('http://localhost:8080/logout');
             setUser(null);
             setIsAuthenticated(false);
             localStorage.removeItem('user');
@@ -63,7 +70,7 @@ export const AuthProvider = ({ children }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ isAuthenticated, user, login, logout, register }}>
+        <AuthContext.Provider value={{ isAuthenticated, user, loading, login, logout, register }}>
             {children}
         </AuthContext.Provider>
     );
