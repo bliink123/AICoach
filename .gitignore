@@ -16,3 +16,17 @@ app_cache.db
 # Ignore OS-specific files
 .DS_Store
 Thumbs.db
+
+# Python bytecode files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database files
+*.db
+*.sqlite3
+
+# Virtual environment
+venv/
+env/
+.env/
