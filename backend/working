@@ -1,428 +1,1297 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from datetime import date, timedelta, datetime
-import json
-# Assuming these helper functions are defined elsewhere, or in the same file
-# from your_module import (
-#     get_run_days_simple,
-#     generate_workout_types_rule_based_phase_aware,
-#     get_distance_factor,
-#     generate_workout_details,
-#     improve_run_schedule_rule_based,
-#     get_default_weekly_mileage,
-#     calculate_phase_multiplier,
-#     determine_race_phase,
-#     get_training_plan_length,
-#     calculate_running_paces,
-#     get_race_prediction, # Assuming you still need this
-#     pace_str_to_minutes, # Assuming you still need this
-#     generate_rest_day_details, # Assuming you still need this
-#     calculate_intensity_score # Assuming you still need this
-# )
-# Assuming ScheduleCache and db are defined for caching (e.g., SQLAlchemy)
-# from your_models import ScheduleCache, db
-
-app = Flask(__name__)
-CORS(app)
-
-# --- Paste your helper functions here ---
-def get_run_days_simple(week_days, run_days, long_run_day):
-    """Simple method to get a set of run days, ensuring long_run_day is included."""
-    selected_run_days = []
-    if long_run_day not in week_days:
-        raise ValueError("long_run_day must be in week_days")
-
-    selected_run_days.append(long_run_day)  # Always include long run day
-
-    # Select other run days (e.g., first few other days - adjust as needed)
-    for day in week_days:
-        if day != long_run_day and len(selected_run_days) < run_days:
-            selected_run_days.append(day)
-
-    return sorted(selected_run_days, key=lambda d: week_days.index(d)) # Keep sorted for consistency
-
-def generate_workout_types_rule_based_phase_aware(race_phase, current_week, total_weeks, run_days, training_distance):
-    """Generates workout types based on rules and race phase."""
-
-    workout_rules_phase_aware = { #  <-- Define your 2D rules dictionary here (as shown previously)
-        "base": {
-            1: ["LongRun"],
-            2: ["LongRun", "Easy"],
-            3: ["LongRun", "Easy", "Easy"],
-            4: ["LongRun", "Easy", "Easy", "Easy"],
-            5: ["LongRun", "Easy", "Easy", "Easy", "Easy"],
-            6: ["LongRun", "Easy", "Easy", "Easy", "Easy", "Easy"],
-            7: ["LongRun", "Easy", "Easy", "Easy", "Easy", "Easy", "Easy"],
-        },
-        "build": {
-            1: ["LongRun"],
-            2: ["LongRun", "Easy"],
-            3: ["LongRun", "Easy", "Threshold"],
-            4: ["LongRun", "Easy", "Easy", "Threshold"],
-            5: ["LongRun", "Easy", "Easy", "Threshold", "Easy"],
-            6: ["LongRun", "Easy", "Easy", "Threshold", "Easy", "Easy"],
-            7: ["LongRun", "Easy", "Easy", "Threshold", "Easy", "Easy", "Easy"],
-        },
-        "peak": {
-            1: ["LongRun"],
-            2: ["LongRun", "Easy"],
-            3: ["LongRun", "Easy", "Intervals"],
-            4: ["LongRun", "Easy", "Intervals", "Threshold"],
-            5: ["LongRun", "Easy", "Intervals", "Threshold", "Easy"],
-            6: ["LongRun", "Easy", "Intervals", "Threshold", "Easy", "Recovery"],
-            7: ["LongRun", "Easy", "Intervals", "Threshold", "Easy", "Recovery", "Easy"],
-        },
-        "taper": {
-            1: ["LongRun"],
-            2: ["LongRun", "Easy"],
-            3: ["LongRun", "Easy", "Easy"],
-            4: ["LongRun", "Easy", "Easy", "Easy"],
-            5: ["LongRun", "Easy", "Easy", "Easy", "Easy"],
-            6: ["LongRun", "Easy", "Easy", "Easy", "Easy", "Easy"],
-            7: ["LongRun", "Easy", "Easy", "Easy", "Easy", "Easy", "Easy"],
-        },
-    }
-
-    if race_phase in workout_rules_phase_aware and run_days in workout_rules_phase_aware[race_phase]:
-        workout_types = workout_rules_phase_aware[race_phase][run_days]
-    else: # Handle cases where rules are not defined (optional - provide a default)
-        workout_types = ["Easy"] * run_days # Default to easy runs if no specific rule
-
-    return workout_types
-
-def get_distance_factor(run_type, race_phase, current_week, total_weeks):
-    base_factors = {"Recovery": 0.10, "Easy": 0.15, "Threshold": 0.12, "Intervals": 0.10, "LongRun": 0.25}
-    factor = base_factors.get(run_type, 0.15)
-    if run_type == "LongRun":
-        if race_phase == "base":
-            factor = 0.25 + (0.05 * current_week / (total_weeks * 0.3))
-        elif race_phase == "build":
-            factor = 0.30 - (0.02 * (current_week - (total_weeks * 0.3)) / (total_weeks * 0.5))
-        elif race_phase == "peak":
-            factor = 0.28
-        elif race_phase == "taper":
-            factor = 0.20 - (0.05 * (current_week - (total_weeks * 0.9)) / (total_weeks * 0.1))
-    return factor
-
-def generate_workout_details(run_type, race_phase, current_week, total_weeks, training_distance, distance):
-    if run_type == "LongRun":
-        if race_phase == "base":
-            return f"Long run: {distance:.1f} km at an easy, conversational pace to build endurance."
-        elif race_phase == "build":
-            return f"Long run: {distance:.1f} km with the last 3-5 km at marathon pace."
-        elif race_phase == "peak":
-            if training_distance == "Marathon":
-                return f"Long run: {distance:.1f} km with the middle {round(distance*0.5):.1f} km at race pace." # Corrected formatting here
-            else:
-                return f"Long run: {distance:.1f} km with a progressive effort, finishing strong."
-        else:
-            return f"Shorter long run: {distance:.1f} km at an easy pace."
-    elif run_type == "Recovery":
-        return f"Recovery run: {distance:.1f} km at a very relaxed pace."
-    elif run_type == "Easy":
-        return f"Easy run: {distance:.1f} km at a comfortable, steady pace."
-    elif run_type == "Threshold":
-        if race_phase == "base":
-            return f"Threshold: {distance:.1f} km including 2-3 x 5 min at threshold pace."
-        elif race_phase == "build":
-            return f"Threshold: {distance:.1f} km with 20 minutes at threshold pace."
-        elif race_phase == "peak":
-            return f"Threshold: {distance:.1f} km with 2 x 15 min at threshold pace."
-        else:
-            return f"Threshold: {distance:.1f} km with 10 minutes at threshold pace."
-    elif run_type == "Intervals":
-        if training_distance in ["5K", "10K"]:
-            if race_phase == "base":
-                return f"Intervals: {distance:.1f} km with 6-8 x 400m at 5K effort."
-            elif race_phase == "build":
-                return f"Intervals: {distance:.1f} km with 5-6 x 800m at 5K effort."
-            elif race_phase == "peak":
-                return f"Intervals: {distance:.1f} km with 5 x 1000m at 5K effort."
-            else:
-                return f"Intervals: {distance:.1f} km with 3-4 x 400m at 5K effort."
-        else:
-            if race_phase == "build":
-                return f"Intervals: {distance:.1f} km with 6-8 x 400m at 10K effort."
-            elif race_phase == "peak":
-                return f"Intervals: {distance:.1f} km with 3-4 x 1 mile at 10K effort."
-            else:
-                return f"Intervals: {distance:.1f} km with 4-5 x 400m at 10K effort."
-    return f"{run_type} run: {distance:.1f} km."
-
-
-def improve_run_schedule_rule_based(workout_types, long_run_day, week_days, run_days):
-    """
-    Improves run schedule by placing Long Run, Rest, and other workouts.
-    Simplified for rule-based workout types.
-    """
-    final_schedule = {}
-    final_schedule[long_run_day] = "LongRun" # Place Long Run First
-
-    # Determine rest days (Simplified - example: 2 rest days, Monday and Friday if available, else distribute)
-    rest_days_needed = 7 - run_days
-    best_rest_days = [] # In a more complete version, you might still have some simplified rest day logic here if needed
-
-    available_days_for_rest = [day for day in week_days if day != long_run_day]
-    rest_days_to_assign = []
-
-    if rest_days_needed >= 2:
-        possible_rest_days = ["Monday", "Friday"] # Example preferred rest days
-        for day in possible_rest_days:
-            if day in available_days_for_rest and len(rest_days_to_assign) < rest_days_needed:
-                rest_days_to_assign.append(day)
-                available_days_for_rest.remove(day)
-
-    # Fill remaining rest days if needed
-    while len(rest_days_to_assign) < rest_days_needed and available_days_for_rest:
-        rest_days_to_assign.append(available_days_for_rest.pop(0)) # Just take remaining available days
-
-    best_rest_days = rest_days_to_assign
-
-
-    # Assign rest days
-    for day in best_rest_days:
-        final_schedule[day] = "Rest"
-
-    # Get remaining run days (excluding Long Run day and rest days)
-    remaining_run_days = [day for day in week_days if day != long_run_day and day not in best_rest_days]
-
-    # Assign remaining workouts in order to remaining run days
-    workout_index = 0
-    workout_types_for_schedule = [wt for wt in workout_types if wt != "LongRun"] # Exclude LongRun as it's already placed
-
-    for day in remaining_run_days:
-        if workout_index < len(workout_types_for_schedule):
-            final_schedule[day] = workout_types_for_schedule[workout_index]
-            workout_index += 1
-        else: # Fill remaining days with Easy if workout_types are exhausted (shouldn't happen if rules are well-defined)
-            final_schedule[day] = "Easy"
-
-    return final_schedule
-
-def get_default_weekly_mileage(training_distance, experience_level, training_goal):
-    # Placeholder - replace with your actual logic
-    if training_distance == "Marathon":
-        return 50  # Example default for marathon
-    elif training_distance == "Half Marathon":
-        return 30 # Example for half marathon
-    elif training_distance == "10K":
-        return 20  # Example for 10k
-    elif training_distance == "5K":
-        return 15 # Example for 5k
-    else:
-        return 25 # Default
-
-def calculate_phase_multiplier(race_phase, current_week, total_weeks):
-    # Placeholder - replace with your actual logic to adjust mileage per phase
-    if race_phase == "base":
-        return 0.8 + (0.2 * current_week / total_weeks) # Gradually increase in base
-    elif race_phase == "build":
-        return 1.0 + (0.1 * current_week / total_weeks) # Further increase in build
-    elif race_phase == "peak":
-        return 1.1 # Peak mileage
-    elif race_phase == "taper":
-        return 0.7 - (0.6 * (current_week / total_weeks)) # Reduce significantly in taper
-    return 1.0
-
-def determine_race_phase(weeks_until_race, training_distance):
-    # Placeholder - replace with your actual logic to determine race phase
-    if weeks_until_race > 10:
-        return "base"
-    elif 6 <= weeks_until_race <= 10:
-        return "build"
-    elif 3 <= weeks_until_race < 6:
-        return "peak"
-    else:
-        return "taper"
-
-def calculate_running_paces(race_prediction, training_distance):
-    # Placeholder - replace with actual pace calculation logic based on race_prediction
-    paces = {
-        "Easy": "5:30-6:30",
-        "Recovery": "6:30-7:00",
-        "Threshold": "4:30-4:45",
-        "Intervals": "3:45-4:15",
-        "LongRun": "5:45-6:45"
-    }
-    return paces
-
-def get_race_prediction(garmin_client, today_str, training_distance):
-    # Placeholder - replace with your actual logic to get race prediction (e.g., from Garmin API)
-    return {"predicted_5k_pace": "25:00", "predicted_10k_pace": "52:00", "predicted_half_pace": "1:55:00", "predicted_marathon_pace": "4:10:00"}
-
-def pace_str_to_minutes(pace_str):
-    # Placeholder - replace with actual pace string to minutes conversion
-    minutes, seconds = map(int, pace_str.split(':'))
-    return minutes + seconds / 60.0
-
-def generate_rest_day_details(rest_day_type):
-    if rest_day_type == "Active Recovery":
-        return "Light activity such as walking, stretching, or easy cycling for 20-30 minutes."
-    elif rest_day_type == "Strength Training":
-        return "Running-specific strength exercises for 30-45 minutes."
-    else:
-        return "Complete rest day to allow full recovery."
-
-def calculate_intensity_score(run_type, distance, pace_minutes):
-    if pace_minutes == "N/A" or pace_minutes is None:
-        return 0
-    intensity_factor = {"Recovery": 0.7, "Easy": 0.8, "Threshold": 1.0, "Intervals": 1.2, "LongRun": 0.85}.get(run_type, 0.8)
-    return round(distance * intensity_factor * pace_minutes)
-
-
-# --- API Endpoint ---
-@app.route('/api/schedule', methods=['POST'])
-def generate_schedule_endpoint():
-    """
-    Generates a personalized weekly running schedule based on user input using rule-based logic.
-    """
-    data = request.get_json()
-    required_fields = ["runDays", "longRunDay", "trainingDistance", "raceDate", "racePhase"] # Keep required fields as before
-    if not data or not all(field in data for field in required_fields):
-        return jsonify({"error": "runDays, longRunDay, trainingDistance, raceDate, and racePhase are required"}), 400
-
-    run_days = data.get("runDays")
-    long_run_day = data.get("longRunDay").capitalize() # Keep capitalization
-    training_distance = data.get("trainingDistance")
-    race_date = data.get("raceDate")
-    race_phase = data.get("racePhase").lower() # Keep lowercase conversion
-    current_mileage = data.get("currentMileage") # Keep current_mileage
-    experience_level = data.get("experienceLevel", "intermediate").lower() # Keep experience_level with default
-    training_goal = data.get("trainingGoal", "pr").lower() # Keep training_goal with default
-
-    week_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    if long_run_day not in week_days:
-        return jsonify({"error": f"Invalid longRunDay. Must be one of: {', '.join(week_days)}"}), 400
-
-    today = date.today()
-    try:
-        race_date_obj = date.fromisoformat(race_date)
-    except Exception as e:
-        return jsonify({"error": "Invalid raceDate format. Use YYYY-MM-DD."}), 400
-    weeks_until_race = max(0, (race_date_obj - today).days // 7)
-
-    if race_phase == "auto":
-        race_phase = determine_race_phase(weeks_until_race, training_distance) # Keep race_phase determination
-
-    total_weeks = get_training_plan_length(training_distance, experience_level) # Keep total_weeks calculation
-    current_week = max(1, total_weeks - weeks_until_race) # Keep current_week calculation
-    default_mileage = get_default_weekly_mileage(training_distance, experience_level, training_goal) # Keep default_mileage
-    phase_multiplier = calculate_phase_multiplier(race_phase, current_week, total_weeks) # Keep phase_multiplier
-    cycle_multiplier = 1.0 # Keep cycle_multiplier logic
-    if current_week % 4 == 0:
-        cycle_multiplier = 0.8
-    elif current_week % 4 == 3:
-        cycle_multiplier = 1.1
-    weekly_mileage = current_mileage if current_mileage is not None else default_mileage * phase_multiplier * cycle_multiplier # Keep weekly_mileage
-
-    # --- Caching Logic (Keep) ---
-    cached_schedule = ScheduleCache.query.filter_by(
-        race_date=race_date,
-        training_distance=training_distance,
-        race_phase=race_phase,
-        run_days=run_days,
-        long_run_day=long_run_day,
-        current_mileage=weekly_mileage,
-        experience_level=experience_level,
-        training_goal=training_goal
-    ).order_by(ScheduleCache.timestamp.desc()).first()
-    if cached_schedule and (datetime.utcnow() - cached_schedule.timestamp) < timedelta(hours=24):
-        return jsonify(json.loads(cached_schedule.schedule_json))
-    # --- End Caching Logic ---
-
-    running_days = get_run_days_simple(week_days, run_days, long_run_day) # Keep run_days function
-    today_str = today.isoformat() # Keep today_str
-    race_prediction = get_race_prediction(None, today_str, training_distance) # Keep race_prediction (assuming garmin_client is not needed now or is handled internally)
-    if not race_prediction:
-        return jsonify({"error": "Race prediction data not found"}), 404
-    running_paces = calculate_running_paces(race_prediction, training_distance) # Keep pace calculation
-    workout_types = generate_workout_types_rule_based_phase_aware(race_phase, current_week, total_weeks, run_days, training_distance) # USE NEW RULE-BASED FUNCTION
-
-    final_schedule = improve_run_schedule_rule_based(workout_types, long_run_day, week_days, run_days) # USE NEW RULE-BASED FUNCTION
-
-    schedule = [] # Keep schedule list for output
-    for day in week_days:
-        if day in final_schedule:
-            run_type = final_schedule[day]
-            if run_type in ["Recovery", "Easy", "Threshold", "Intervals", "LongRun", "Rest", "Active Recovery", "Strength Training"]: # Include Rest days as workout types
-                target_pace = running_paces.get(run_type, "N/A")
-                pace_minutes = pace_str_to_minutes(target_pace) if target_pace != "N/A" else None
-                distance_factor = get_distance_factor(run_type, race_phase, current_week, total_weeks)
-                run_distance = round(weekly_mileage * distance_factor, 1)
-                run_duration = round(run_distance * pace_minutes) if pace_minutes else "N/A"
-
-                if run_type in ["Rest", "Active Recovery", "Strength Training"]: # Handle rest day details
-                    workout_details = generate_rest_day_details(run_type)
-                else:
-                    workout_details = generate_workout_details(run_type, race_phase, current_week, total_weeks, training_distance, run_distance)
-
-                intensity_score = calculate_intensity_score(run_type, run_distance, pace_minutes)
-                schedule.append({
-                    "Day": day,
-                    "WorkoutType": run_type,
-                    "WorkoutDetails": workout_details,
-                    "TargetPace": target_pace + " per km" if target_pace != "N/A" else target_pace,
-                    "Duration": f"{run_duration} minutes" if run_duration != "N/A" else "N/A",
-                    "Distance": f"{run_distance} km" if run_type not in ["Rest", "Active Recovery", "Strength Training"] else "N/A", # Distance for run workouts
-                    "IntensityScore": intensity_score if run_type not in ["Rest", "Active Recovery", "Strength Training"] else 0 # Intensity for run workouts
-                })
-            else:
-                schedule.append({ # Handle cases where workout_type is not recognized (shouldn't happen, but for safety)
-                    "Day": day,
-                    "WorkoutType": run_type,
-                    "WorkoutDetails": "Workout details not available.",
-                    "TargetPace": "N/A",
-                    "Duration": "N/A",
-                    "Distance": "N/A",
-                    "IntensityScore": 0
-                })
-        else:
-            schedule.append({ # Handle days with no scheduled workout (shouldn't happen anymore)
-                "Day": day,
-                "WorkoutType": "Rest",
-                "WorkoutDetails": generate_rest_day_details("Rest"),
-                "TargetPace": "N/A",
-                "Duration": "N/A",
-                "Distance": "N/A",
-                "IntensityScore": 0
-            })
-
-    weekly_intensity = sum(item.get("IntensityScore", 0) for item in schedule if isinstance(item.get("IntensityScore"), (int, float))) # Keep intensity calculation
-    schedule_summary = { # Keep schedule summary
-        "weeklyMileage": round(weekly_mileage, 1),
-        "weeklyIntensity": weekly_intensity,
-        "currentWeek": current_week,
-        "totalWeeks": total_weeks,
-        "racePhase": race_phase,
-        "weeksUntilRace": weeks_until_race
-    }
-    full_response = { # Keep full response structure
-        "schedule": schedule,
-        "summary": schedule_summary
-    }
-
-    schedule_json = json.dumps(full_response) # Keep JSON conversion and caching
-    new_cache = ScheduleCache(
-        race_date=race_date,
-        training_distance=training_distance,
-        race_phase=race_phase,
-        run_days=run_days,
-        long_run_day=long_run_day,
-        current_mileage=weekly_mileage,
-        experience_level=experience_level,
-        training_goal=training_goal,
-        schedule_json=schedule_json
+def train_race_prediction_model(user_id):
+    """Train a model to predict race times based on recent training."""
+    # Get user data
+    data = export_user_data_for_ml(user_id)
+    activities_df = data['activities']
+    metrics_df = data['metrics']
+    
+    # Not enough data for reliable predictions
+    if len(activities_df) < 30 or len(metrics_df) < 10:
+        logger.info(f"Not enough data to train race prediction model for user {user_id}")
+        return None
+    
+    # Create features from training history
+    # Group activities by week
+    activities_df['date'] = pd.to_datetime(activities_df['date'])
+    activities_df['week'] = activities_df['date'].dt.isocalendar().week
+    activities_df['year'] = activities_df['date'].dt.isocalendar().year
+    
+    # Calculate weekly training metrics
+    weekly_metrics = activities_df.groupby(['year', 'week']).agg({
+        'distance': 'sum',
+        'duration': 'sum',
+        'training_effect_aerobic': 'mean',
+        'date': 'max'  # Get the last day of the week
+    }).reset_index()
+    
+    # Calculate rolling averages (4-week training load)
+    weekly_metrics = weekly_metrics.sort_values(['year', 'week'])
+    weekly_metrics['rolling_distance'] = weekly_metrics['distance'].rolling(4).mean()
+    weekly_metrics['rolling_duration'] = weekly_metrics['duration'].rolling(4).mean()
+    weekly_metrics['rolling_te'] = weekly_metrics['training_effect_aerobic'].rolling(4).mean()
+    
+    # Join with race prediction metrics
+    weekly_metrics['date'] = pd.to_datetime(weekly_metrics['date'])
+    metrics_df['date'] = pd.to_datetime(metrics_df['date'])
+    
+    merged_data = pd.merge_asof(
+        weekly_metrics.sort_values('date'), 
+        metrics_df.sort_values('date')[['date', 'race_prediction_5k', 'vo2max']], 
+        on='date',
+        direction='forward'
     )
-    db.session.add(new_cache)
+    
+    # Drop rows with missing values
+    merged_data = merged_data.dropna(subset=['rolling_distance', 'race_prediction_5k', 'vo2max'])
+    
+    if len(merged_data) < 10:
+        logger.info(f"Not enough merged data points for user {user_id}")
+        return None
+    
+    # Prepare training data
+    X = merged_data[['rolling_distance', 'rolling_duration', 'rolling_te', 'vo2max']]
+    y = merged_data['race_prediction_5k']  # Predict 5K time in seconds
+    
+    # Split data
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Train model
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Evaluate
+    accuracy = model.score(X_test, y_test)
+    
+    # Save model
+    save_model(user_id, 'race_prediction', model, accuracy, len(merged_data))
+    
+    logger.info(f"Race prediction model trained for user {user_id} with accuracy: {accuracy:.2f}")
+    
+    return {
+        'model': model,
+        'accuracy': accuracy
+    }
+
+def recommend_workout(user_id):
+    """Generate workout recommendations based on current recovery status."""
+    
+    # Get today's recovery metrics
+    today = date.today()
+    metrics = UserPerformanceMetrics.query.filter_by(
+        user_id=user_id, date=today
+    ).first()
+    
+    if not metrics:
+        # Try to fetch metrics now
+        garmin_client = get_garmin_client()
+        results = batch_fetch_garmin_data(user_id, today.isoformat(), garmin_client)
+        if results:
+            metrics = process_performance_metrics(user_id, results, today.isoformat())
+    
+    # Load the user's trained models
+    readiness_model = load_model(user_id, 'readiness_impact')
+    
+    # Define potential workouts
+    potential_workouts = [
+        {
+            'name': 'Recovery Run',
+            'description': 'Easy effort, conversation pace',
+            'distance': 5000,  # 5K in meters
+            'duration': 1800,  # 30 minutes
+            'avg_hr': 130,
+            'training_effect_aerobic': 1.5,
+            'intensity': 'low'
+        },
+        {
+            'name': 'Base Building Run',
+            'description': 'Steady effort, building endurance',
+            'distance': 8000,  # 8K in meters
+            'duration': 2700,  # 45 minutes
+            'avg_hr': 145,
+            'training_effect_aerobic': 2.5,
+            'intensity': 'medium-low'
+        },
+        {
+            'name': 'Tempo Run',
+            'description': 'Comfortably hard effort, improves lactate threshold',
+            'distance': 10000,  # 10K in meters
+            'duration': 3600,  # 60 minutes
+            'avg_hr': 160,
+            'training_effect_aerobic': 3.5,
+            'intensity': 'medium-high'
+        },
+        {
+            'name': 'Interval Session',
+            'description': 'High intensity repeats with recovery',
+            'distance': 8000,  # 8K including warm-up/cool-down
+            'duration': 2700,  # 45 minutes
+            'avg_hr': 165,
+            'training_effect_aerobic': 4.5,
+            'intensity': 'high'
+        }
+    ]
+    
+    # If we have a model, predict recovery impact of each workout
+    if readiness_model and metrics:
+        current_readiness = metrics.training_readiness
+        
+        for workout in potential_workouts:
+            # Format features to match training data
+            features = [[
+                workout['distance'], 
+                workout['duration'], 
+                workout['avg_hr'], 
+                workout['training_effect_aerobic']
+            ]]
+            
+            # Predict next day's readiness after this workout
+            predicted_readiness = readiness_model.predict(features)[0]
+            workout['predicted_readiness_impact'] = predicted_readiness
+            
+        # Find suitable workouts based on current recovery
+        if current_readiness >= 70:
+            # Well recovered - can handle higher intensity
+            suitable_workouts = [w for w in potential_workouts if w['intensity'] in ['medium-high', 'high']]
+            if not suitable_workouts:
+                suitable_workouts = potential_workouts
+        elif current_readiness >= 50:
+            # Moderately recovered - medium intensity
+            suitable_workouts = [w for w in potential_workouts if w['intensity'] in ['medium-low', 'medium-high']]
+            if not suitable_workouts:
+                suitable_workouts = potential_workouts
+        else:
+            # Low recovery - stick to easy workouts
+            suitable_workouts = [w for w in potential_workouts if w['intensity'] in ['low', 'medium-low']]
+            if not suitable_workouts:
+                suitable_workouts = [potential_workouts[0]]  # Recovery run
+                
+        # Select workout with best recovery impact from suitable options
+        recommended = max(suitable_workouts, key=lambda w: w.get('predicted_readiness_impact', 0))
+        
+        return {
+            'current_readiness': current_readiness,
+            'recommended_workout': recommended['name'],
+            'workout_description': recommended['description'],
+            'expected_duration': recommended['duration'] // 60,  # Convert to minutes
+            'expected_distance': recommended['distance'] // 1000,  # Convert to km
+            'expected_readiness_tomorrow': recommended.get('predicted_readiness_impact'),
+            'rationale': f"Based on your current recovery status ({current_readiness:.1f}/100) and predicted impact on tomorrow's readiness."
+        }
+    
+    # Fallback if no model or metrics available
+    else:
+        # Use a simple rule-based approach
+        # Get recent activities 
+        last_week = today - timedelta(days=7)
+        recent_activities = Activity.query.filter(
+            Activity.user_id == user_id,
+            Activity.activity_date >= datetime.combine(last_week, datetime.min.time())
+        ).order_by(Activity.activity_date.desc()).all()
+        
+        # Check if last workout was high intensity
+        high_intensity_recent = False
+        if recent_activities:
+            last_activity = recent_activities[0]
+            if last_activity.training_effect_aerobic and last_activity.training_effect_aerobic > 3.0:
+                high_intensity_recent = True
+        
+        # Alternate between easy and harder workouts
+        if high_intensity_recent:
+            recommended = potential_workouts[0]  # Recovery run
+        else:
+            recommended = potential_workouts[2]  # Tempo run
+        
+        return {
+            'recommended_workout': recommended['name'],
+            'workout_description': recommended['description'],
+            'expected_duration': recommended['duration'] // 60,
+            'expected_distance': recommended['distance'] // 1000,
+            'rationale': "Based on your recent training pattern. For more personalized recommendations, continue syncing with Garmin."
+        }
+
+def get_training_insights(user_id):
+    """Generate training insights based on historical data."""
+    # Get user data
+    data = export_user_data_for_ml(user_id)
+    activities_df = data['activities']
+    metrics_df = data['metrics']
+    
+    if len(activities_df) < 10:
+        return {
+            'insights': [
+                "Continue logging your runs to receive personalized training insights.",
+                "We recommend at least 3 runs per week for optimal improvement."
+            ]
+        }
+    
+    insights = []
+    
+    # Calculate weekly mileage
+    activities_df['date'] = pd.to_datetime(activities_df['date'])
+    activities_df['week'] = activities_df['date'].dt.isocalendar().week
+    activities_df['year'] = activities_df['date'].dt.isocalendar().year
+    
+    weekly_distance = activities_df.groupby(['year', 'week'])['distance'].sum() / 1000  # Convert to km
+    avg_weekly_distance = weekly_distance.mean()
+    max_weekly_distance = weekly_distance.max()
+    
+    insights.append(f"Your average weekly distance is {avg_weekly_distance:.1f} km, with a peak of {max_weekly_distance:.1f} km.")
+    
+    # Analyze workout variety
+    workout_counts = activities_df.groupby('training_effect_aerobic').size()
+    easy_runs = workout_counts[workout_counts.index < 2.5].sum() if len(workout_counts[workout_counts.index < 2.5]) > 0 else 0
+    medium_runs = workout_counts[(workout_counts.index >= 2.5) & (workout_counts.index < 3.5)].sum() if len(workout_counts[(workout_counts.index >= 2.5) & (workout_counts.index < 3.5)]) > 0 else 0
+    hard_runs = workout_counts[workout_counts.index >= 3.5].sum() if len(workout_counts[workout_counts.index >= 3.5]) > 0 else 0
+    
+    total_runs = len(activities_df)
+    easy_pct = easy_runs / total_runs * 100 if total_runs > 0 else 0
+    
+    if easy_pct < 70 and total_runs >= 10:
+        insights.append(f"Only {easy_pct:.1f}% of your runs are easy runs. Consider adding more easy runs - most elite runners do 80% easy, 20% hard.")
+    
+    # Look at training consistency
+    activities_df = activities_df.sort_values('date')
+    activities_df['days_since_last'] = activities_df['date'].diff().dt.days
+    
+    avg_gap = activities_df['days_since_last'].mean()
+    max_gap = activities_df['days_since_last'].max()
+    
+    if avg_gap > 3 and total_runs >= 5:
+        insights.append(f"Your average gap between runs is {avg_gap:.1f} days. More consistent training (every 1-2 days) may improve results.")
+    
+    if max_gap > 7 and total_runs >= 5:
+        insights.append(f"Your longest gap between runs was {max_gap:.0f} days. Try to avoid long breaks for optimal fitness development.")
+    
+    # Analyze performance trends if we have VO2max data
+    if 'vo2max' in metrics_df.columns and not metrics_df['vo2max'].isnull().all():
+        metrics_df = metrics_df.sort_values('date')
+        first_vo2 = metrics_df['vo2max'].iloc[0] if not pd.isna(metrics_df['vo2max'].iloc[0]) else None
+        last_vo2 = metrics_df['vo2max'].iloc[-1] if not pd.isna(metrics_df['vo2max'].iloc[-1]) else None
+        
+        if first_vo2 and last_vo2:
+            change = last_vo2 - first_vo2
+            if change > 0:
+                insights.append(f"Your VO2max has improved by {change:.1f} points, showing your training is effective!")
+            elif change < 0:
+                insights.append(f"Your VO2max has decreased by {abs(change):.1f} points. This might be due to inconsistent training or other factors.")
+    
+    return {
+        'insights': insights,
+        'stats': {
+            'total_runs': total_runs,
+            'avg_weekly_distance': avg_weekly_distance,
+            'max_weekly_distance': max_weekly_distance,
+            'easy_run_percentage': easy_pct,
+            'avg_days_between_runs': avg_gap
+        }
+    }
+
+# API Endpoints
+
+from flask import Flask, jsonify, request, session, g
+from flask_login import login_user, logout_user, login_required, current_user
+from datetime import timedelta
+
+def configure_app(app, garmin_client):
+    # Authentication configuration
+    app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+    app.config['SESSION_TYPE'] = 'filesystem'
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Changed from 'Strict'
+    
+    # API endpoints for ML features
+    
+    @app.route('/api/recent-running-activities', methods=['GET'])
+    @login_required
+    def recent_running_activities():
+        """Get user's recent running activities."""
+        try:
+            # Get recent activities (fetch more since we'll be filtering)
+            activities = garmin_client.get_activities(0, 30)  # Fetch 30 to ensure we get enough running activities
+            
+            # Filter for running activities only
+            running_activities = []
+            running_types = ["running", "treadmill_running", "trail_running", "track_running", "indoor_running"]
+            
+            for activity in activities:
+                activity_type = activity.get("activityType", {}).get("typeKey", "").lower()
+                
+                # Check if it matches any running type
+                if any(run_type in activity_type for run_type in running_types):
+                    running_activities.append({
+                        "id": activity.get("activityId"),
+                        "type": activity.get("activityType", {}).get("typeKey"),
+                        "name": activity.get("activityName"),
+                        "date": activity.get("startTimeLocal"),
+                        "distance": activity.get("distance"),
+                        "duration": activity.get("duration"),
+                        "averagePace": activity.get("averagePace"),
+                        "averageHR": activity.get("averageHR"),
+                        "elevationGain": activity.get("elevationGain"),
+                        "calories": activity.get("calories")
+                    })
+            
+            # Return only the first 10 running activities            
+            return jsonify(running_activities[:10])
+        except Exception as e:
+            logger.error(f"Error fetching activities: {e}")
+            return jsonify({"error": "Failed to fetch activities"}), 500
+    
+    @app.route('/api/activity/<activity_id>', methods=['GET'])
+    @login_required
+    def activity_details(activity_id):
+        """Get detailed information about a specific running activity."""
+        try:
+            # Try to get from database first
+            activity = Activity.query.filter_by(garmin_activity_id=activity_id).first()
+            
+            # If not in database, fetch and store
+            if not activity:
+                activity = process_and_store_activity(current_user.id, garmin_client.get_activity_details(activity_id), garmin_client)
+                
+            if not activity:
+                return jsonify({"error": "Activity not found"}), 404
+                
+            # Return activity details
+            details = json.loads(activity.details_json) if activity.details_json else {}
+            
+            response = {
+                "id": activity.garmin_activity_id,
+                "type": activity.activity_type,
+                "date": activity.activity_date.isoformat(),
+                "distance": activity.distance,
+                "duration": activity.duration,
+                "avgHR": activity.avg_hr,
+                "maxHR": activity.max_hr,
+                "avgPace": activity.avg_pace,
+                "calories": activity.calories,
+                "trainingEffectAerobic": activity.training_effect_aerobic,
+                "trainingEffectAnaerobic": activity.training_effect_anaerobic,
+                "detailedData": details
+            }
+                
+            return jsonify(response)
+        except Exception as e:
+            logger.error(f"Error fetching activity details: {e}")
+            return jsonify({"error": "Failed to fetch activity details"}), 500
+    
+    @app.route('/api/training-data', methods=['GET'])
+    @login_required
+    def training_data():
+        """Get comprehensive training data for the user."""
+        try:
+            # Fetch the latest data from Garmin
+            today = date.today().isoformat()
+            daily_update_user_data(current_user.id, today, garmin_client)
+            
+            # Get performance metrics for the last 30 days
+            thirty_days_ago = date.today() - timedelta(days=30)
+            metrics = UserPerformanceMetrics.query.filter(
+                UserPerformanceMetrics.user_id == current_user.id,
+                UserPerformanceMetrics.date >= thirty_days_ago
+            ).order_by(UserPerformanceMetrics.date).all()
+            
+            # Format metrics for response
+            metrics_data = [{
+                "date": m.date.isoformat(),
+                "vo2max": m.vo2max,
+                "sleep_score": m.sleep_score,
+                "training_readiness": m.training_readiness,
+                "resting_heart_rate": m.resting_heart_rate
+            } for m in metrics]
+            
+            # Get race predictions
+            latest_metrics = UserPerformanceMetrics.query.filter_by(
+                user_id=current_user.id
+            ).order_by(UserPerformanceMetrics.date.desc()).first()
+            
+            race_predictions = {}
+            if latest_metrics:
+                # Convert seconds back to HH:MM:SS format
+                if latest_metrics.race_prediction_5k:
+                    hours, remainder = divmod(latest_metrics.race_prediction_5k, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    race_predictions['5k'] = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+                
+                if latest_metrics.race_prediction_10k:
+                    hours, remainder = divmod(latest_metrics.race_prediction_10k, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    race_predictions['10k'] = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+                
+                if latest_metrics.race_prediction_half:
+                    hours, remainder = divmod(latest_metrics.race_prediction_half, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    race_predictions['half_marathon'] = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+                
+                if latest_metrics.race_prediction_full:
+                    hours, remainder = divmod(latest_metrics.race_prediction_full, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    race_predictions['marathon'] = f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}"
+            
+            # Get recent activities
+            recent_activities = Activity.query.filter_by(
+                user_id=current_user.id
+            ).order_by(Activity.activity_date.desc()).limit(10).all()
+            
+            activities_data = [{
+                "id": a.garmin_activity_id,
+                "date": a.activity_date.isoformat(),
+                "type": a.activity_type,
+                "distance": a.distance,
+                "duration": a.duration,
+                "avg_hr": a.avg_hr
+            } for a in recent_activities]
+            
+            return jsonify({
+                "metrics": metrics_data,
+                "race_predictions": race_predictions,
+                "recent_activities": activities_data
+            })
+        except Exception as e:
+            logger.error(f"Error getting training data: {e}")
+            return jsonify({"error": "Failed to retrieve training data"}), 500
+    
+    @app.route('/api/workout-recommendation', methods=['GET'])
+    @login_required
+    def workout_recommendation():
+        """Get personalized workout recommendation."""
+        try:
+            recommendation = recommend_workout(current_user.id)
+            return jsonify(recommendation)
+        except Exception as e:
+            logger.error(f"Error generating workout recommendation: {e}")
+            return jsonify({"error": "Failed to generate recommendation"}), 500
+    
+    @app.route('/api/training-insights', methods=['GET'])
+    @login_required
+    def training_insights():
+        """Get personalized training insights."""
+        try:
+            insights = get_training_insights(current_user.id)
+            return jsonify(insights)
+        except Exception as e:
+            logger.error(f"Error generating training insights: {e}")
+            return jsonify({"error": "Failed to generate insights"}), 500
+    
+    @app.route('/api/train-models', methods=['POST'])
+    @login_required
+    def train_models_endpoint():
+        """Manually trigger ML model training."""
+        try:
+            # Train recovery model
+            recovery_results = train_recovery_model(current_user.id)
+            
+            # Train race prediction model
+            race_results = train_race_prediction_model(current_user.id)
+            
+            return jsonify({
+                "message": "Models trained successfully",
+                "recovery_model": {
+                    "trained": recovery_results is not None,
+                    "accuracy": recovery_results['sleep_accuracy'] if recovery_results else None
+                },
+                "race_model": {
+                    "trained": race_results is not None,
+                    "accuracy": race_results['accuracy'] if race_results else None
+                }
+            })
+        except Exception as e:
+            logger.error(f"Error training models: {e}")
+            return jsonify({"error": "Failed to train models"}), 500
+
+    # Update existing endpoints
+    
+    @app.route('/login', methods=['POST'])
+    def login():
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            # Make the session permanent
+            session.permanent = True
+            login_user(user, remember=True)
+            return jsonify({"id": user.id, "username": user.username, "email": user.email}), 200
+        return jsonify({"error": "Invalid credentials"}), 401
+    
+    @app.route('/api/overall-sleep', methods=['GET'])
+    @login_required
+    def overall_sleep():
+        """Get sleep and recovery metrics using the new batch fetching approach."""
+        today_str = date.today().isoformat()
+        
+        # Use the batch fetching function
+        results = batch_fetch_garmin_data(current_user.id, today_str, garmin_client)
+        
+        # Extract needed metrics
+        sleep_data = results.get('sleep', {})
+        readiness_data = results.get('training_readiness', {})
+        
+        overall_value, avg_over_night_hrv, body_battery_change = None, None, None
+        
+        if isinstance(sleep_data, dict):
+            daily = sleep_data.get("dailySleepDTO", {})
+            overall_value = daily.get("sleepScores", {}).get("overall", {}).get("value")
+            avg_over_night_hrv = daily.get("avgOvernightHrv") or sleep_data.get("avgOvernightHrv")
+            body_battery_change = daily.get("bodyBatteryChange") or sleep_data.get("bodyBatteryChange")
+        
+        training_readiness = None
+        if isinstance(readiness_data, dict):
+            training_readiness = readiness_data.get("score")
+        
+        return jsonify({
+            "overallSleepScore": overall_value,
+            "avgOvernightHrv": avg_over_night_hrv,
+            "bodyBatteryChange": body_battery_change,
+            "trainingReadiness": training_readiness
+        })
+
+# Set up token storage file path
+TOKEN_STORE = os.path.expanduser("~/.garmin_tokens.json")
+
+def setup_scheduled_tasks(app, garmin_client):
+    """Set up scheduled tasks for data fetching and model training."""
+    
+    # We'll use a simple approach for this example
+    # In production, you might use Celery, APScheduler, or cron jobs
+    
+    @app.before_first_request
+    def initialize_scheduled_tasks():
+        import threading
+        import time
+        
+        def run_daily_tasks():
+            while True:
+                with app.app_context():
+                    try:
+                        # Update data for all users
+                        update_all_users_data(garmin_client)
+                        
+                        # Clean up old cache entries
+                        cleanup_old_cache()
+                        
+                        # Train models for users with new data
+                        active_users = User.query.filter_by(is_active=True).all()
+                        for user in active_users:
+                            try:
+                                # Only train if we have enough data
+                                data = export_user_data_for_ml(user.id)
+                                if len(data['activities']) >= 20:
+                                    train_recovery_model(user.id)
+                                
+                                if len(data['activities']) >= 30:
+                                    train_race_prediction_model(user.id)
+                            except Exception as e:
+                                logger.error(f"Error training models for user {user.id}: {e}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error in scheduled tasks: {e}")
+                    
+                    logger.info("Daily scheduled tasks completed")
+                    
+                # Sleep for 24 hours
+                time.sleep(24 * 60 * 60)
+        
+        # Start the scheduler in a background thread
+        scheduler_thread = threading.Thread(target=run_daily_tasks)
+        scheduler_thread.daemon = True
+        scheduler_thread.start()
+        logger.info("Scheduled tasks initialized")
+
+# Utility function to get Garmin client
+def get_garmin_client():
+    """Helper to get or initialize Garmin client."""
+    # This would typically be stored in your application context
+    # For this example, we'll just create a new instance
+    GARMIN_USERNAME = os.getenv("GARMIN_USERNAME")
+    GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
+    from garminconnect import Garmin
+    
+    def get_mfa():
+        return input("Enter MFA code: ")
+    
+    try:
+        logger.info("Attempting token login using tokens from '%s'.", TOKEN_STORE)
+        garmin = Garmin()  # Use tokens
+        garmin.login(TOKEN_STORE)
+    except Exception as err:
+        logger.error("Token login failed: %s", err)
+        print(f"Tokens not present or expired. Logging in with credentials.")
+        try:
+            garmin = Garmin(email=GARMIN_USERNAME, password=GARMIN_PASSWORD, is_cn=False, prompt_mfa=get_mfa)
+            garmin.login()
+            garmin.garth.dump(TOKEN_STORE)
+            logger.info("Tokens stored in '%s'.", TOKEN_STORE)
+        except Exception as err:
+            logger.error("Credential login failed: %s", err)
+            return None
+    return garmin
+# Database Models
+
+## Enhanced Data Storage Models
+
+from datetime import datetime, date, timedelta
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import UserMixin
+from werkzeug.security import generate_password_hash, check_password_hash
+import json
+import logging
+
+db = SQLAlchemy()
+logger = logging.getLogger(__name__)
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+        
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class GarminDataCache(db.Model):
+    """Short-term cache for API performance optimization."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    data_type = db.Column(db.String(50), nullable=False)  # 'sleep', 'training_readiness', etc.
+    data_date = db.Column(db.Date, nullable=False)
+    data_json = db.Column(db.Text, nullable=False)
+    last_updated = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Composite unique constraint
+    __table_args__ = (db.UniqueConstraint('user_id', 'data_type', 'data_date', name='cache_constraint'),)
+
+class GarminDataArchive(db.Model):
+    """Long-term storage for ML data analysis."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    data_type = db.Column(db.String(50), nullable=False)  # 'sleep', 'activity', etc.
+    data_date = db.Column(db.Date, nullable=False)
+    data_json = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Composite unique constraint
+    __table_args__ = (db.UniqueConstraint('user_id', 'data_type', 'data_date', name='archive_constraint'),)
+
+class Activity(db.Model):
+    """Storage for running activity data."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    garmin_activity_id = db.Column(db.String(50), nullable=False, unique=True)
+    activity_type = db.Column(db.String(50))
+    activity_date = db.Column(db.DateTime, nullable=False)
+    distance = db.Column(db.Float)  # in meters
+    duration = db.Column(db.Integer)  # in seconds
+    avg_hr = db.Column(db.Integer)
+    max_hr = db.Column(db.Integer)
+    avg_pace = db.Column(db.Float)  # in seconds per meter
+    calories = db.Column(db.Integer)
+    training_effect_aerobic = db.Column(db.Float)
+    training_effect_anaerobic = db.Column(db.Float)
+    details_json = db.Column(db.Text)  # Store full details for ML processing
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref=db.backref('activities', lazy=True))
+
+class UserPerformanceMetrics(db.Model):
+    """Extracted performance metrics for ML analysis."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    date = db.Column(db.Date, nullable=False)
+    
+    # VO2max and race predictions
+    vo2max = db.Column(db.Float)
+    race_prediction_5k = db.Column(db.Integer)  # seconds
+    race_prediction_10k = db.Column(db.Integer)  # seconds
+    race_prediction_half = db.Column(db.Integer)  # seconds
+    race_prediction_full = db.Column(db.Integer)  # seconds
+    
+    # Daily stress and recovery metrics
+    avg_stress = db.Column(db.Float)
+    max_stress = db.Column(db.Float)
+    resting_heart_rate = db.Column(db.Integer)
+    sleep_score = db.Column(db.Float)
+    body_battery_change = db.Column(db.Integer)
+    overnight_hrv = db.Column(db.Float)
+    training_readiness = db.Column(db.Float)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref=db.backref('performance_metrics', lazy=True))
+    
+    __table_args__ = (db.UniqueConstraint('user_id', 'date', name='user_date_metrics_constraint'),)
+
+class MLModel(db.Model):
+    """Storage for trained ML models."""
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    model_type = db.Column(db.String(50), nullable=False)  # 'recovery_predictor', 'race_predictor', etc.
+    model_version = db.Column(db.Integer, default=1)
+    model_file_path = db.Column(db.String(255), nullable=False)
+    accuracy_score = db.Column(db.Float)
+    training_data_count = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user = db.relationship('User', backref=db.backref('ml_models', lazy=True))
+    
+    __table_args__ = (db.UniqueConstraint('user_id', 'model_type', 'model_version', name='model_constraint'),)
+
+# Garmin Data Fetching and Processing
+
+## Optimized Batch Fetching
+
+def is_cache_stale(cache_entry):
+    """Check if a cache entry is stale based on data type."""
+    if not cache_entry:
+        return True
+        
+    cache_age = datetime.now() - cache_entry.last_updated
+    
+    # Different freshness rules for different data types
+    if cache_entry.data_type in ['sleep', 'training_readiness', 'heart_rate', 'stress']:
+        # These change daily - fresh for 4 hours if today's data, otherwise keep
+        today = date.today()
+        if cache_entry.data_date == today:
+            return cache_age.total_seconds() > 4 * 3600  # 4 hours
+        return False  # Historical data doesn't get stale
+    
+    elif cache_entry.data_type in ['vo2max', 'race_predictions']:
+        # These change less frequently - fresh for 24 hours
+        return cache_age.total_seconds() > 24 * 3600  # 24 hours
+    
+    # Default - 12 hours
+    return cache_age.total_seconds() > 12 * 3600  # 12 hours
+
+def store_garmin_data(user_id, data_type, date_str, data):
+    """Store data in both cache and archive."""
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    data_json = json.dumps(data)
+    
+    # Write to cache (for API performance)
+    cache_entry = GarminDataCache.query.filter_by(
+        user_id=user_id, data_type=data_type, data_date=target_date
+    ).first()
+    
+    if cache_entry:
+        cache_entry.data_json = data_json
+        cache_entry.last_updated = datetime.utcnow()
+    else:
+        cache_entry = GarminDataCache(
+            user_id=user_id,
+            data_type=data_type,
+            data_date=target_date,
+            data_json=data_json
+        )
+        db.session.add(cache_entry)
+    
+    # Always write to archive (for ML)
+    # Check if we already have this exact data archived
+    archive_entry = GarminDataArchive.query.filter_by(
+        user_id=user_id, data_type=data_type, data_date=target_date
+    ).first()
+    
+    if not archive_entry:
+        archive_entry = GarminDataArchive(
+            user_id=user_id,
+            data_type=data_type,
+            data_date=target_date,
+            data_json=data_json
+        )
+        db.session.add(archive_entry)
+    
     db.session.commit()
 
-    return jsonify(full_response) # Return JSON response
+def batch_fetch_garmin_data(user_id, date_str=None, garmin_client=None):
+    """
+    Fetch multiple data types from Garmin API in one coordinated batch.
+    If date_str is None, fetches today's data.
+    """
+    if date_str is None:
+        date_str = date.today().isoformat()
+    
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    results = {}
+    
+    try:
+        # Check what we already have in cache for this date
+        cache_records = GarminDataCache.query.filter_by(
+            user_id=user_id, 
+            data_date=target_date
+        ).all()
+        
+        cached_types = {record.data_type: record for record in cache_records}
+        
+        # Fetch sleep data if needed
+        if 'sleep' not in cached_types or is_cache_stale(cached_types['sleep']):
+            logger.info(f"Fetching sleep data for user {user_id} on {date_str}")
+            sleep_data = garmin_client.get_sleep_data(date_str)
+            if sleep_data:
+                results['sleep'] = sleep_data
+                store_garmin_data(user_id, 'sleep', date_str, sleep_data)
+        else:
+            results['sleep'] = json.loads(cached_types['sleep'].data_json)
+            
+        # Fetch training readiness if needed
+        if 'training_readiness' not in cached_types or is_cache_stale(cached_types['training_readiness']):
+            logger.info(f"Fetching training readiness for user {user_id} on {date_str}")
+            readiness_data = garmin_client.get_training_readiness(date_str)
+            if readiness_data:
+                results['training_readiness'] = readiness_data
+                store_garmin_data(user_id, 'training_readiness', date_str, readiness_data)
+        else:
+            results['training_readiness'] = json.loads(cached_types['training_readiness'].data_json)
+        
+        # Fetch race predictions if needed
+        if 'race_predictions' not in cached_types or is_cache_stale(cached_types['race_predictions']):
+            logger.info(f"Fetching race predictions for user {user_id}")
+            try:
+                race_predictions = garmin_client.get_race_predictions()
+                if race_predictions:
+                    results['race_predictions'] = race_predictions
+                    store_garmin_data(user_id, 'race_predictions', date_str, race_predictions)
+            except Exception as e:
+                logger.error(f"Error fetching race predictions: {e}")
+        else:
+            results['race_predictions'] = json.loads(cached_types['race_predictions'].data_json)
+        
+        # Fetch VO2max data if needed
+        if 'vo2max' not in cached_types or is_cache_stale(cached_types['vo2max']):
+            logger.info(f"Fetching VO2max data for user {user_id}")
+            try:
+                vo2max_data = garmin_client.get_user_profile()
+                if vo2max_data and 'userVO2Max' in vo2max_data:
+                    results['vo2max'] = vo2max_data
+                    store_garmin_data(user_id, 'vo2max', date_str, vo2max_data)
+            except Exception as e:
+                logger.error(f"Error fetching VO2max data: {e}")
+        else:
+            results['vo2max'] = json.loads(cached_types['vo2max'].data_json)
+        
+        # Fetch heart rate data if needed
+        if 'heart_rate' not in cached_types or is_cache_stale(cached_types['heart_rate']):
+            logger.info(f"Fetching heart rate data for user {user_id} on {date_str}")
+            try:
+                heart_rate_data = garmin_client.get_heart_rates(date_str)
+                if heart_rate_data:
+                    results['heart_rate'] = heart_rate_data
+                    store_garmin_data(user_id, 'heart_rate', date_str, heart_rate_data)
+            except Exception as e:
+                logger.error(f"Error fetching heart rate data: {e}")
+        else:
+            results['heart_rate'] = json.loads(cached_types['heart_rate'].data_json)
+        
+        # Fetch stress data if needed
+        if 'stress' not in cached_types or is_cache_stale(cached_types['stress']):
+            logger.info(f"Fetching stress data for user {user_id} on {date_str}")
+            try:
+                stress_data = garmin_client.get_stress_data(date_str)
+                if stress_data:
+                    results['stress'] = stress_data
+                    store_garmin_data(user_id, 'stress', date_str, stress_data)
+            except Exception as e:
+                logger.error(f"Error fetching stress data: {e}")
+        else:
+            results['stress'] = json.loads(cached_types['stress'].data_json)
+            
+        # Only fetch activities for today or recent days
+        today = date.today()
+        if (today - target_date).days <= 7:
+            # For activities, we check the Activity model instead of cache
+            recent_activities = Activity.query.filter(
+                Activity.user_id == user_id,
+                Activity.activity_date >= datetime.combine(target_date, datetime.min.time()),
+                Activity.activity_date < datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+            ).all()
+            
+            if not recent_activities:
+                # Only fetch activities if we don't have them already
+                start_of_day = int(datetime.combine(target_date, datetime.min.time()).timestamp() * 1000)
+                end_of_day = int(datetime.combine(target_date + timedelta(days=1), datetime.min.time()).timestamp() * 1000)
+                
+                logger.info(f"Fetching activities for user {user_id} on {date_str}")
+                activities = garmin_client.get_activities_by_date(
+                    start_of_day, end_of_day, 0, 10
+                )
+                
+                if activities:
+                    results['activities'] = activities
+                    # Process and store activities
+                    for activity in activities:
+                        process_and_store_activity(user_id, activity, garmin_client)
+            else:
+                results['activities'] = [
+                    json.loads(activity.details_json) for activity in recent_activities
+                    if activity.details_json
+                ]
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error in batch fetch: {e}")
+        return results  # Return whatever we managed to fetch
 
+def process_and_store_activity(user_id, activity_data, garmin_client=None):
+    """Process an activity from Garmin API and store in our database."""
+    # Check if we already have this activity
+    activity_id = activity_data.get("activityId")
+    existing = Activity.query.filter_by(garmin_activity_id=activity_id).first()
+    if existing:
+        return existing
+        
+    # Filter for running activities
+    activity_type = activity_data.get("activityType", {}).get("typeKey", "").lower()
+    running_types = ["running", "treadmill_running", "trail_running", "track_running", "indoor_running"]
+    
+    if not any(run_type in activity_type for run_type in running_types):
+        return None  # Not a running activity
+    
+    # Create activity record with basic data
+    activity_date = datetime.strptime(activity_data.get("startTimeLocal"), "%Y-%m-%d %H:%M:%S")
+    
+    new_activity = Activity(
+        user_id=user_id,
+        garmin_activity_id=activity_id,
+        activity_type=activity_type,
+        activity_date=activity_date,
+        distance=activity_data.get("distance"),
+        duration=activity_data.get("duration"),
+        avg_hr=activity_data.get("averageHR"),
+        avg_pace=activity_data.get("averagePace"),
+        calories=activity_data.get("calories")
+    )
+    
+    # Try to get detailed data if basic record doesn't have what we need
+    if not new_activity.avg_hr or 'trainingEffect' not in activity_data:
+        try:
+            details = garmin_client.get_activity_details(activity_id)
+            if details:
+                # Update with more complete data
+                new_activity.max_hr = details.get("maxHR")
+                new_activity.training_effect_aerobic = details.get("aerobicTrainingEffect")
+                new_activity.training_effect_anaerobic = details.get("anaerobicTrainingEffect")
+                new_activity.details_json = json.dumps(details)
+        except Exception as e:
+            logger.error(f"Error fetching details for activity {activity_id}: {e}")
+    else:
+        # Basic data already has what we need
+        new_activity.details_json = json.dumps(activity_data)
+    
+    # Save to database
+    db.session.add(new_activity)
+    db.session.commit()
+    
+    return new_activity
 
-if __name__ == '__main__':
-    # Example of setting up database (if you are using SQLAlchemy and Flask-SQLAlchemy)
-    # app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:' # Or your database URI
-    # db.init_app(app)
-    # with app.app_context():
-    #     db.create_all()
-    app.run(debug=True)
+def process_performance_metrics(user_id, results, date_str):
+    """Extract and store performance metrics from API results."""
+    target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    
+    # Check if we already have metrics for this date
+    existing = UserPerformanceMetrics.query.filter_by(
+        user_id=user_id, date=target_date
+    ).first()
+    
+    if existing:
+        metrics = existing
+    else:
+        metrics = UserPerformanceMetrics(user_id=user_id, date=target_date)
+    
+    # Extract VO2max
+    if 'vo2max' in results:
+        vo2max_data = results['vo2max']
+        if isinstance(vo2max_data, dict):
+            metrics.vo2max = vo2max_data.get('userVO2Max')
+    
+    # Extract race predictions
+    if 'race_predictions' in results:
+        race_data = results['race_predictions']
+        if isinstance(race_data, dict):
+            # Convert times to seconds for storage
+            for distance, field_name in [
+                ('5k', 'race_prediction_5k'),
+                ('10k', 'race_prediction_10k'),
+                ('halfMarathon', 'race_prediction_half'),
+                ('marathon', 'race_prediction_full')
+            ]:
+                time_str = race_data.get(distance)
+                if time_str:
+                    # Convert "HH:MM:SS" to seconds
+                    parts = time_str.split(':')
+                    if len(parts) == 3:
+                        h, m, s = parts
+                        total_seconds = int(h) * 3600 + int(m) * 60 + int(s)
+                        setattr(metrics, field_name, total_seconds)
+    
+    # Extract stress data
+    if 'stress' in results:
+        stress_data = results['stress']
+        if isinstance(stress_data, dict):
+            metrics.avg_stress = stress_data.get('avgStressLevel')
+            metrics.max_stress = stress_data.get('maxStressLevel')
+    
+    # Extract heart rate data
+    if 'heart_rate' in results:
+        hr_data = results['heart_rate']
+        if isinstance(hr_data, dict):
+            metrics.resting_heart_rate = hr_data.get('restingHeartRate')
+    
+    # Extract sleep and recovery data
+    if 'sleep' in results:
+        sleep_data = results['sleep']
+        if isinstance(sleep_data, dict):
+            daily_sleep = sleep_data.get('dailySleepDTO', {})
+            metrics.sleep_score = daily_sleep.get('sleepScores', {}).get('overall', {}).get('value')
+            metrics.overnight_hrv = daily_sleep.get('avgOvernightHrv')
+            metrics.body_battery_change = daily_sleep.get('bodyBatteryChange')
+    
+    # Extract training readiness
+    if 'training_readiness' in results:
+        readiness_data = results['training_readiness']
+        if isinstance(readiness_data, dict):
+            metrics.training_readiness = readiness_data.get('score')
+    
+    # Save to database
+    if not existing:
+        db.session.add(metrics)
+    db.session.commit()
+    
+    return metrics
+
+def daily_update_user_data(user_id, date_str=None, garmin_client=None):
+    """Complete daily update of all user data."""
+    if date_str is None:
+        date_str = date.today().isoformat()
+    
+    # Fetch all data from Garmin API
+    results = batch_fetch_garmin_data(user_id, date_str, garmin_client)
+    
+    # Process performance metrics
+    if results:
+        process_performance_metrics(user_id, results, date_str)
+    
+    return results
+
+def cleanup_old_cache():
+    """Remove cache entries older than 90 days."""
+    cutoff_date = date.today() - timedelta(days=90)
+    old_entries = GarminDataCache.query.filter(GarminDataCache.data_date < cutoff_date).all()
+    
+    for entry in old_entries:
+        db.session.delete(entry)
+    
+    db.session.commit()
+    logger.info(f"Cleaned up {len(old_entries)} old cache entries")
+
+def update_all_users_data(garmin_client):
+    """
+    Daily scheduled task to update all users' data once.
+    Run this early morning to get previous day's sleep and activity data.
+    """
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    active_users = User.query.filter_by(is_active=True).all()
+    
+    for user in active_users:
+        try:
+            daily_update_user_data(user.id, yesterday, garmin_client)
+            # Sleep a bit between users to avoid hitting API limits
+            time.sleep(5)
+        except Exception as e:
+            logger.error(f"Failed to update data for user {user.id}: {e}")
+
+# Machine Learning Components
+
+## Model Training and Prediction
+
+import pandas as pd
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import joblib
+import os
+
+def save_model(user_id, model_type, model, accuracy=None, data_count=None):
+    """Save ML model to disk and record in database."""
+    # Create models directory if it doesn't exist
+    os.makedirs('models', exist_ok=True)
+    
+    # Get latest version for this model type
+    latest = MLModel.query.filter_by(
+        user_id=user_id, model_type=model_type
+    ).order_by(MLModel.model_version.desc()).first()
+    
+    version = 1
+    if latest:
+        version = latest.model_version + 1
+    
+    # Create filename and path
+    filename = f"user_{user_id}_{model_type}_v{version}.pkl"
+    filepath = os.path.join('models', filename)
+    
+    # Save the model
+    joblib.dump(model, filepath)
+    
+    # Record in database
+    model_record = MLModel(
+        user_id=user_id,
+        model_type=model_type,
+        model_version=version,
+        model_file_path=filepath,
+        accuracy_score=accuracy,
+        training_data_count=data_count
+    )
+    
+    db.session.add(model_record)
+    db.session.commit()
+    
+    return model_record
+
+def load_model(user_id, model_type):
+    """Load the latest model for a user."""
+    model_record = MLModel.query.filter_by(
+        user_id=user_id, model_type=model_type
+    ).order_by(MLModel.model_version.desc()).first()
+    
+    if not model_record:
+        return None
+    
+    try:
+        return joblib.load(model_record.model_file_path)
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        return None
+
+def export_user_data_for_ml(user_id):
+    """Export all user data for ML processing."""
+    # Get all performance metrics
+    metrics = UserPerformanceMetrics.query.filter_by(user_id=user_id).order_by(UserPerformanceMetrics.date).all()
+    
+    # Get all activities
+    activities = Activity.query.filter_by(user_id=user_id).order_by(Activity.activity_date).all()
+    
+    # Create DataFrames
+    metrics_df = pd.DataFrame([{
+        'date': m.date,
+        'vo2max': m.vo2max,
+        'race_prediction_5k': m.race_prediction_5k,
+        'race_prediction_10k': m.race_prediction_10k, 
+        'race_prediction_half': m.race_prediction_half,
+        'race_prediction_full': m.race_prediction_full,
+        'avg_stress': m.avg_stress,
+        'max_stress': m.max_stress,
+        'resting_heart_rate': m.resting_heart_rate,
+        'sleep_score': m.sleep_score,
+        'body_battery_change': m.body_battery_change,
+        'overnight_hrv': m.overnight_hrv,
+        'training_readiness': m.training_readiness
+    } for m in metrics])
+    
+    activities_df = pd.DataFrame([{
+        'date': activity.activity_date.date(),
+        'type': activity.activity_type,
+        'distance': activity.distance,
+        'duration': activity.duration,
+        'avg_hr': activity.avg_hr,
+        'max_hr': activity.max_hr,
+        'avg_pace': activity.avg_pace,
+        'calories': activity.calories,
+        'training_effect_aerobic': activity.training_effect_aerobic,
+        'training_effect_anaerobic': activity.training_effect_anaerobic
+    } for activity in activities])
+    
+    return {
+        'metrics': metrics_df,
+        'activities': activities_df
+    }
+
+def prepare_training_impact_data(user_id):
+    """
+    Prepare data for training a model to predict how workouts impact recovery.
+    Links each activity with the next day's recovery metrics.
+    """
+    # Get user data
+    data = export_user_data_for_ml(user_id)
+    activities_df = data['activities']
+    metrics_df = data['metrics']
+    
+    # Make sure date columns are datetime
+    activities_df['date'] = pd.to_datetime(activities_df['date'])
+    metrics_df['date'] = pd.to_datetime(metrics_df['date'])
+    
+    # For each activity, find the next day's recovery metrics
+    training_data = []
+    
+    for idx, activity in activities_df.iterrows():
+        activity_date = activity['date']
+        next_day = activity_date + pd.Timedelta(days=1)
+        
+        # Find metrics for the next day
+        next_day_metrics = metrics_df[metrics_df['date'] == next_day]
+        
+        if not next_day_metrics.empty:
+            # Create a training example
+            training_example = {
+                'activity_date': activity_date,
+                'distance': activity['distance'],
+                'duration': activity['duration'],
+                'avg_hr': activity['avg_hr'],
+                'training_effect_aerobic': activity['training_effect_aerobic'],
+                'next_day_sleep_score': next_day_metrics.iloc[0]['sleep_score'],
+                'next_day_hrv': next_day_metrics.iloc[0]['overnight_hrv'],
+                'next_day_readiness': next_day_metrics.iloc[0]['training_readiness']
+            }
+            
+            training_data.append(training_example)
+    
+    return pd.DataFrame(training_data)
+
+def train_recovery_model(user_id):
+    """Train a model to predict recovery metrics after a workout."""
+    # Prepare training data
+    df = prepare_training_impact_data(user_id)
+    
+    # Check if we have enough data
+    if len(df) < 20:
+        logger.info(f"Not enough data to train model for user {user_id}. Need at least 20 samples.")
+        return None
+    
+    # Prepare features and targets
+    X = df[['distance', 'duration', 'avg_hr', 'training_effect_aerobic']]
+    y_sleep = df['next_day_sleep_score']
+    y_readiness = df['next_day_readiness']
+    
+    # Train models
+    sleep_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    readiness_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    
+    # Split data
+    X_train, X_test, y_sleep_train, y_sleep_test = train_test_split(X, y_sleep, test_size=0.2, random_state=42)
+    _, _, y_readiness_train, y_readiness_test = train_test_split(X, y_readiness, test_size=0.2, random_state=42)
+    
+    # Fit models
+    sleep_model.fit(X_train, y_sleep_train)
+    readiness_model.fit(X_train, y_readiness_train)
+    
+    # Evaluate
+    sleep_accuracy = sleep_model.score(X_test, y_sleep_test)
+    readiness_accuracy = readiness_model.score(X_test, y_readiness_test)
+    
+    # Save models
+    save_model(user_id, 'sleep_impact', sleep_model, sleep_accuracy, len(df))
+    save_model(user_id, 'readiness_impact', readiness_model, readiness_accuracy, len(df))
+    
+    logger.info(f"Models trained for user {user_id}:")
+    logger.info(f"Sleep impact model accuracy: {sleep_accuracy:.2f}")
+    logger.info(f"Readiness impact model accuracy: {readiness_accuracy:.2f}")
+    
+    return {
+        'sleep_model': sleep_model,
+        'readiness_model': readiness_model,
+        'sleep_accuracy': sleep_accuracy,
+        'readiness_accuracy': readiness_accuracy
+    }

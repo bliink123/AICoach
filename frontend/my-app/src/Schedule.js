@@ -13,7 +13,9 @@ import {
   TableCell,
   Paper,
   MenuItem,
-  CircularProgress
+  CircularProgress,
+  Alert,
+  Box
 } from '@mui/material';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8080';
@@ -60,6 +62,8 @@ const Schedule = ({ trainingDistance }) => {
   const [scheduleSummary, setScheduleSummary] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [mlRecommendation, setMlRecommendation] = useState(null);
+  const [mlRecommendationLoading, setMlRecommendationLoading] = useState(false);
 
   useEffect(() => {
     const fetchSchedule = async () => {
@@ -89,6 +93,9 @@ const Schedule = ({ trainingDistance }) => {
         setTrainingGoal(payload.trainingGoal);
 
         setError('');
+        
+        // Fetch ML recommendation for comparison
+        fetchMlRecommendation();
       } catch (err) {
         console.error(err);
         setError('Failed to fetch schedule');
@@ -99,6 +106,18 @@ const Schedule = ({ trainingDistance }) => {
 
     fetchSchedule();
   }, [trainingDistance]);
+
+  const fetchMlRecommendation = async () => {
+    setMlRecommendationLoading(true);
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/workout-recommendation`);
+      setMlRecommendation(response.data);
+    } catch (err) {
+      console.error("Error fetching ML recommendation:", err);
+    } finally {
+      setMlRecommendationLoading(false);
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -121,7 +140,9 @@ const Schedule = ({ trainingDistance }) => {
       setError('');
 
       localStorage.setItem('scheduleParams', JSON.stringify(payload));
-
+      
+      // Refresh ML recommendation when schedule updates
+      fetchMlRecommendation();
     } catch (err) {
       console.error(err);
       setError('Failed to generate schedule');
@@ -135,6 +156,41 @@ const Schedule = ({ trainingDistance }) => {
       <Typography variant="h4" gutterBottom>
         Weekly Running Schedule
       </Typography>
+      
+      {mlRecommendation && (
+        <Box sx={{ mb: 4 }}>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <Typography variant="h6" component="div">
+              ML-Powered Workout Recommendation for Today
+            </Typography>
+            <Typography variant="body1">
+              <strong>Recommended Workout:</strong> {mlRecommendation.recommended_workout}
+            </Typography>
+            <Typography variant="body1">
+              <strong>Description:</strong> {mlRecommendation.workout_description}
+            </Typography>
+            <Typography variant="body1">
+              <strong>Distance:</strong> {mlRecommendation.expected_distance} km | <strong>Duration:</strong> {mlRecommendation.expected_duration} minutes
+            </Typography>
+            {mlRecommendation.expected_readiness_tomorrow && (
+              <Typography variant="body1">
+                <strong>Expected Readiness Tomorrow:</strong> {mlRecommendation.expected_readiness_tomorrow.toFixed(1)}
+              </Typography>
+            )}
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              <em>Rationale: {mlRecommendation.rationale}</em>
+            </Typography>
+          </Alert>
+        </Box>
+      )}
+      
+      {mlRecommendationLoading && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', mb: 4 }}>
+          <CircularProgress size={24} sx={{ mr: 1 }} />
+          <Typography>Loading ML recommendation...</Typography>
+        </Box>
+      )}
+      
       <form
         onSubmit={handleSubmit}
         style={{ marginBottom: 20, display: 'flex', flexWrap: 'wrap', gap: '16px' }}
@@ -232,11 +288,11 @@ const Schedule = ({ trainingDistance }) => {
       {scheduleSummary && (
           <Typography variant="body1" sx={{ marginBottom: 2 }}>
               <strong>Weekly Mileage:</strong> {scheduleSummary.weeklyMileage} km, 
-              <strong>Weekly Intensity:</strong> {scheduleSummary.weeklyIntensity}, 
-              <strong>Current Week:</strong> {scheduleSummary.currentWeek},
-              <strong>Total Weeks:</strong> {scheduleSummary.totalWeeks},
-              <strong>Race Phase:</strong> {scheduleSummary.racePhase},
-              <strong>Weeks Until Race:</strong> {scheduleSummary.weeksUntilRace}
+              <strong> Weekly Intensity:</strong> {scheduleSummary.weeklyIntensity}, 
+              <strong> Current Week:</strong> {scheduleSummary.currentWeek},
+              <strong> Total Weeks:</strong> {scheduleSummary.totalWeeks},
+              <strong> Race Phase:</strong> {scheduleSummary.racePhase},
+              <strong> Weeks Until Race:</strong> {scheduleSummary.weeksUntilRace}
           </Typography>
       )}
       {schedule.length > 0 && (

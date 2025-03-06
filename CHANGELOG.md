@@ -2,6 +2,128 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2025-03-10
+### Added
+**Frontend Integration of ML Features:**
+
+Added new components to integrate with machine learning backend features:
+
+WorkoutRecommendation.js - Displays ML-powered workout suggestions with personalized metrics
+TrainingInsights.js - Shows data-driven analysis of training patterns and trends
+ActivityList.js - Provides an enhanced interface for browsing running history
+ActivityDetail.js - Offers comprehensive view of individual activities with training effect analysis
+
+Updated Dashboard with tabbed interface to organize ML features
+Added "Train ML Models" button to manually trigger model training
+Enhanced Schedule component to incorporate ML-powered workout recommendations
+Added routes in App.js for accessing ML features directly
+
+Fixed
+
+Resolved issues with pace calculation and display in activity listings
+Fixed date handling in activity fetching to improve reliability
+Enhanced API integration with proper error handling for race predictions and training readiness
+Improved duration formatting for better readability
+Fixed Material UI icons package dependencies
+
+## [1.5.0] - 2025-03-07
+### Added
+**Machine Learning Integration and Intelligent Coaching:**
+- Added ML model training capabilities for personalized workout recommendations and race predictions
+- Implemented efficient data caching and archiving for improved performance and ML training
+- Added comprehensive activity tracking and performance metrics storage
+- Created new endpoints for personalized training insights and workout recommendations
+- Implemented scheduled tasks for background data processing and model training
+
+**Architecture Improvements:**
+- Refactored application into modular components using Flask blueprints:
+  - Separated database models into dedicated models.py
+  - Created auth.py for authentication-related functionality
+  - Implemented garmin_data.py for efficient data fetching and processing
+  - Added schedule.py for enhanced schedule generation
+  - Added ai_coach.py for AI coaching features
+  - Added ml.py for machine learning capabilities
+- Enhanced database schema with new models for activity tracking and ML models
+
+**New API Endpoints:**
+- `/api/workout-recommendation` - Get personalized workout suggestions based on recovery status
+- `/api/training-insights` - Get insights based on training history and patterns
+- `/api/train-models` - Manually trigger model training
+- `/api/recent-running-activities` - List recent running activities
+- `/api/activity/<activity_id>` - Get detailed information for a specific activity
+- `/api/training-data` - Get comprehensive training data including metrics and predictions
+
+**Performance Enhancements:**
+- Implemented efficient data caching with freshness rules based on data type
+- Added batch fetching of Garmin data to reduce API calls
+- Created data archiving for long-term ML training data preservation
+
+## [1.4.0] - 2025-03-04
+### Added
+**Authentication Persistence Fix:**
+Added loading state to AuthContext to prevent premature redirects during authentication checks
+Improved session persistence with permanent sessions via session.permanent = True
+Set PERMANENT_SESSION_LIFETIME to 7 days for extended login duration
+Modified SESSION_COOKIE_SAMESITE from 'Strict' to 'Lax' to improve SPA compatibility
+
+**Changed**
+Updated PrivateRoute component with loading indicator while authentication status is being verified
+Restructured AuthContext to properly expose loading state to child components
+Improved error handling in authentication verification process
+
+**Fixed**
+Fixed persistent login issues that were causing users to be redirected to login page after refresh
+Corrected race condition in frontend authentication check that resulted in premature navigation
+Resolved cookie persistence issues by properly configuring both frontend and backend authentication parameters
+
+## [1.3.0] - 2025-03-03
+### Added
+**Persistent Authentication Enhancements:**
+Implemented persistent login by setting login_user(user, remember=True) in the /login endpoint.
+Updated the /login endpoint to store user_id in the Flask session.
+Added a /logout endpoint that clears the session (removes user_id) upon logout.
+Introduced a /me endpoint (protected by @login_required) to verify the current authenticated user, enabling the frontend to update its authentication state automatically.
+
+**Session Cookie Security Updates:**
+Configured secure session cookie settings:
+SESSION_COOKIE_DOMAIN set to 'localhost' to ensure cookies are shared between the backend and frontend.
+Enabled SESSION_COOKIE_HTTPONLY, SESSION_COOKIE_SECURE (for HTTPS), and SESSION_COOKIE_SAMESITE set to 'Strict' to enhance cookie security.
+
+**Improved Unauthorized Handling:**
+Customized the unauthorized handler to return a JSON 401 response instead of redirecting, ensuring API clients receive a proper error code.
+
+---
+
+## [1.2.0] - 2025-03-03
+#### ✨ Enhancements
+
+*   **Improved Rest Day Distribution:** The schedule generation logic has been updated to distribute rest days more evenly throughout the week. Previously, rest days tended to cluster at the beginning of the week. This enhancement ensures a better balanced weekly schedule, promoting better recovery and training consistency.
+
+    *   **Technical Change:** In `api/helper_functions.py`, the `improve_run_schedule_rule_based` function was modified. The method for assigning remaining rest days now uses `available_days.pop()` instead of `available_days.pop(0)`. This change makes the algorithm select rest days from the end of the available days list, leading to a more spread-out placement of rest days across the week.
+
+*   **Refined Workout Sequencing for Build and Peak Phases:**  Significant improvements have been made to the workout sequencing, especially within the "build" and "peak" training phases.  The generated schedules now incorporate more strategic placement of different workout types to create more logical training progressions.
+
+    *   **Technical Change:** The `workout_rules_phase_aware` dictionary in `api/helper_functions.py` has been extensively updated.  Specifically, for the "build" and "peak" phases and for run days counts of 3, 4, 5, 6, and 7, the workout type lists have been modified. These modifications prioritize:
+        *   Spacing out harder workouts (Threshold, Intervals, Long Runs) with easier runs (Easy, Recovery).
+        *   Ensuring sufficient "Easy" and "Recovery" runs, especially around Long Run days and after more intense sessions.
+        *   Creating more structured weekly workout patterns that align with typical training principles for build and peak phases.
+
+*   **User Authentication Added:** Implemented basic user authentication to the API, enhancing security and enabling future user-specific features. Users can now register and log in to the application.
+    *   **Technical Changes:**
+        *   **Flask-Login Integration:** Added Flask-Login for user session management.
+        *   **User Model:** Created a `User` model in `api/models.py` using Flask-SQLAlchemy to store user credentials (username and hashed password). Password hashing is implemented using `werkzeug.security` for security.
+        *   **Registration Endpoint (`/api/register`):** Implemented a new endpoint for user registration, handling username validation, password hashing, and user creation in the database.
+        *   **Login Endpoint (`/api/login`):** Implemented a login endpoint to authenticate users against stored credentials and establish user sessions using Flask-Login.
+        *   **Logout Endpoint (`/api/logout`):** Added a logout endpoint to terminate user sessions.
+        *   **Route Protection (`@login_required`):** Introduced the `@login_required` decorator from Flask-Login to protect specific API endpoints, demonstrating how to restrict access to logged-in users only (example: `/api/protected`).
+        *   **Database Configuration:** Configured Flask-SQLAlchemy and initialized a database (example using SQLite).
+        *   **Frontend Integration (React):** (Note: While primarily backend change)  Frontend UI will need to be updated to include registration and login forms, handle API authentication responses, and manage user sessions on the client-side.
+
+#### 🧪 Testing & Development
+*   Caching in the `/api/schedule` endpoint has been temporarily disabled to facilitate easier testing and iterative development of schedule generation logic. Caching will be re-enabled in a future update for production and performance optimization.
+
+ --
+
 ## [1.1.0] - 2025-02-26
 ### Added
 - **Advanced Periodization Integration:**
@@ -105,12 +227,12 @@ All notable changes to this project will be documented in this file.
 
 ## Upcoming
 ### Planned Features
-- Expand periodization model to include strength and cross-training sessions.
-- Add user authentication and individual training history.
-- Improve AI-generated recommendations with more contextual data and user feedback.
-- Incorporate graphical data visualizations in the dashboard.
-- Enable exporting schedules to calendar apps (Google Calendar, iCal).
-- Expand caching mechanisms to include feedback analysis.
+- Expand machine learning capabilities with additional predictive models
+- Create personalized training plan generation based on user history
+- Add data visualization for training trends and insights
+- Implement progress tracking and goal monitoring
+- Add integration with additional fitness platforms and services
+- Develop a companion mobile app for on-the-go access
 
 ---
 

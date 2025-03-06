@@ -6,7 +6,9 @@ import Register from './components/Register';
 import PrivateRoute from './PrivateRoute';
 import { AuthProvider } from './AuthContext';
 import { GlobalStyles } from '@mui/material';
-
+import ActivityDetail from './ActivityDetail';
+import WorkoutRecommendation from './WorkoutRecommendation';
+import TrainingInsights from './TrainingInsights';
 
 function App() {
   return (
@@ -30,6 +32,9 @@ function App() {
           <Route path="/register" element={<Register />} />
           <Route path="/" element={<PrivateRoute />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/activity/:activityId" element={<ActivityDetail />} />
+            <Route path="/recommendations" element={<WorkoutRecommendation />} />
+            <Route path="/insights" element={<TrainingInsights />} />
           </Route>
         </Routes>
       </Router>
